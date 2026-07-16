@@ -53,3 +53,11 @@ htmlcov/
 # Logs
 *.log
 logs/
+
+# Claude Code user files
+.claude/settings.json
+.claude/settings.local.json
+
+# Coverage
+coverage.xml
+.coverage
