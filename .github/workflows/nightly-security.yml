@@ -1,0 +1,47 @@
+name: Nightly Security Scan
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+
+      - name: Secret scanning (TruffleHog)
+        uses: trufflesecurity/trufflehog@main
+        with:
+          extra_args: --only-verified
+
+      - name: Dependency audit (pip-audit)
+        run: |
+          pip install pip-audit
+          cd backend
+          pip-audit -r requirements.txt
+
+      - name: License audit (pip-licenses)
+        run: |
+          pip install pip-licenses
+          cd backend
+          pip install -r requirements.txt
+          pip-licenses --fail-on="GPL;AGPL;SSPL"
+
+      - name: SAST (Semgrep)
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: p/owasp-top-ten p/python

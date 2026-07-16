@@ -6,10 +6,32 @@ requires-python = ">=3.12"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = "--cov=. --cov-report=term --cov-report=xml"
 
 [tool.ruff]
 target-version = "py312"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "W", "UP"]
+select = ["E", "F", "I", "N", "W", "UP", "S", "B", "A", "C4", "PT"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_any_generics = true
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["firebase_admin.*", "google.*", "bs4.*", "feedparser.*"]
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["."]
+omit = ["tests/*", "config/settings.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
