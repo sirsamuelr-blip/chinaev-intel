@@ -1,0 +1,12 @@
+{
+  "智能驾驶": { "correct": "intelligent driving / ADAS", "wrong": "smart driving" },
+  "座舱": { "correct": "cockpit", "wrong": "cabin" },
+  "大模型": { "correct": "large language model / LLM", "wrong": "big model" },
+  "城市NOA": { "correct": "city navigate-on-autopilot", "wrong": "city NOA" },
+  "激光雷达": { "correct": "LiDAR", "wrong": "laser radar" },
+  "智能座舱": { "correct": "smart cockpit", "wrong": "intelligent cabin" },
+  "域控制器": { "correct": "domain controller", "wrong": "area controller" },
+  "线控底盘": { "correct": "drive-by-wire chassis", "wrong": "wire-controlled chassis" },
+  "算力": { "correct": "compute power", "wrong": "calculation power" },
+  "高阶智驾": { "correct": "advanced intelligent driving", "wrong": "high-level smart driving" }
+}
