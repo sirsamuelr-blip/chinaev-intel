@@ -1,0 +1,310 @@
+"""Tests for db.firestore helpers.
+
+All Firestore operations are mocked — no real client, emulator, or
+network. The mock client mirrors Firestore's chained API:
+``collection() -> where()/order_by()/limit() -> get()`` and
+``collection() -> document() -> update()``, with async leaf calls
+(``add``, ``get``, ``update``) as AsyncMock.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from google.cloud.firestore import SERVER_TIMESTAMP
+
+from db import firestore
+
+DOC_ID = "doc-abc-123"
+
+SAMPLE_ARTICLE = {
+    "source_name": "gasgoo",
+    "source_url": "https://autonews.gasgoo.com/article-1",
+    "title_zh": "小鹏发布新智驾系统",
+    "title_en": "XPeng launches new ADAS",
+    "body_zh": "正文",
+    "body_en": "Body text",
+    "publish_date": "2026-07-17T08:00:00+00:00",
+    "scrape_date": "2026-07-18T02:00:00+00:00",
+}
+
+SAMPLE_EXTRACTED = {
+    "title_en": "XPeng launches new ADAS",
+    "body_en": "Full translation",
+    "relevance_score": 9,
+    "content_type": "news",
+    "brands_mentioned": ["XPeng"],
+    "vehicles_mentioned": ["XPeng P7"],
+    "features_extracted": [{"feature_name": "City NOA", "category": "adas"}],
+    "competitive_signal": "City NOA rollout accelerating.",
+}
+
+SAMPLE_METRICS = {
+    "source_name": "gasgoo",
+    "status": "success",
+    "articles_ingested": 12,
+    "requests_made": 15,
+    "error_count": 0,
+    "errors": [],
+    "duration_seconds": 143.2,
+}
+
+
+def _make_doc_ref(doc_id: str = DOC_ID) -> MagicMock:
+    """Build a mock document reference with an async ``update``."""
+    doc_ref = MagicMock()
+    doc_ref.id = doc_id
+    doc_ref.update = AsyncMock()
+    return doc_ref
+
+
+def _make_snapshot(doc_id: str, data: dict[str, Any]) -> MagicMock:
+    """Build a mock document snapshot returning ``data`` from ``to_dict``."""
+    snapshot = MagicMock()
+    snapshot.id = doc_id
+    snapshot.to_dict.return_value = data
+    return snapshot
+
+
+def _make_query(results: list[MagicMock]) -> MagicMock:
+    """Build a mock query whose chained calls return itself and yield ``results``."""
+    query = MagicMock()
+    query.order_by.return_value = query
+    query.limit.return_value = query
+    query.get = AsyncMock(return_value=results)
+    return query
+
+
+@pytest.fixture
+def doc_ref() -> MagicMock:
+    """Mock document reference shared by the client fixture."""
+    return _make_doc_ref()
+
+
+@pytest.fixture
+def collection_ref(doc_ref: MagicMock) -> MagicMock:
+    """Mock collection reference with async ``add`` and chainable ``where``."""
+    collection = MagicMock()
+    collection.add = AsyncMock(return_value=(MagicMock(), doc_ref))
+    collection.document.return_value = doc_ref
+    collection.where.return_value = _make_query([])
+    return collection
+
+
+@pytest.fixture
+def mock_db(monkeypatch: pytest.MonkeyPatch, collection_ref: MagicMock) -> MagicMock:
+    """Mock AsyncClient patched into the module-level ``_db`` cache."""
+    db = MagicMock()
+    db.collection.return_value = collection_ref
+    monkeypatch.setattr(firestore, "_db", db)
+    return db
+
+
+class TestSaveArticle:
+    """save_article writes camelCased docs to the articles collection."""
+
+    async def test_save_article_writes_to_collection(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """The doc is camelCased with processed=False and processingError=None."""
+        await firestore.save_article(SAMPLE_ARTICLE)
+
+        mock_db.collection.assert_called_once_with("articles")
+        collection_ref.add.assert_awaited_once()
+        (data,) = collection_ref.add.await_args.args
+        assert data["sourceName"] == "gasgoo"
+        assert data["sourceUrl"] == "https://autonews.gasgoo.com/article-1"
+        assert data["titleZh"] == "小鹏发布新智驾系统"
+        assert data["publishDate"] == "2026-07-17T08:00:00+00:00"
+        assert data["scrapeDate"] == "2026-07-18T02:00:00+00:00"
+        assert data["processed"] is False
+        assert data["processingError"] is None
+        assert "source_name" not in data
+
+    async def test_save_article_returns_doc_id(self, mock_db: MagicMock) -> None:
+        """The returned string is the mock doc ref's auto-generated ID."""
+        result = await firestore.save_article(SAMPLE_ARTICLE)
+
+        assert result == DOC_ID
+
+
+class TestArticleExists:
+    """article_exists deduplicates by sourceUrl."""
+
+    async def test_article_exists_returns_true(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """A non-empty query result means the article is already stored."""
+        collection_ref.where.return_value = _make_query(
+            [_make_snapshot(DOC_ID, {"sourceUrl": "https://example.com/a"})]
+        )
+
+        assert await firestore.article_exists("https://example.com/a") is True
+
+        field_filter = collection_ref.where.call_args.kwargs["filter"]
+        assert field_filter.field_path == "sourceUrl"
+        assert field_filter.op_string == "=="
+        assert field_filter.value == "https://example.com/a"
+
+    async def test_article_exists_returns_false(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """An empty query result means the article is new."""
+        collection_ref.where.return_value = _make_query([])
+
+        assert await firestore.article_exists("https://example.com/new") is False
+
+
+class TestGetUnprocessedArticles:
+    """get_unprocessed_articles feeds the LLM pipeline queue."""
+
+    async def test_get_unprocessed_articles_queries_correctly(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """The query filters processed==False, orders by scrapeDate, limits."""
+        query = _make_query([])
+        collection_ref.where.return_value = query
+
+        await firestore.get_unprocessed_articles(limit=25)
+
+        mock_db.collection.assert_called_once_with("articles")
+        field_filter = collection_ref.where.call_args.kwargs["filter"]
+        assert field_filter.field_path == "processed"
+        assert field_filter.op_string == "=="
+        assert field_filter.value is False
+        query.order_by.assert_called_once_with("scrapeDate")
+        query.limit.assert_called_once_with(25)
+
+    async def test_get_unprocessed_articles_returns_dicts_with_ids(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """Each result carries the doc ID and snake_case field names."""
+        collection_ref.where.return_value = _make_query(
+            [
+                _make_snapshot("doc-1", {"sourceName": "gasgoo", "titleEn": "One"}),
+                _make_snapshot("doc-2", {"sourceName": "cnevpost", "titleEn": "Two"}),
+            ]
+        )
+
+        articles = await firestore.get_unprocessed_articles()
+
+        assert articles == [
+            {"id": "doc-1", "source_name": "gasgoo", "title_en": "One"},
+            {"id": "doc-2", "source_name": "cnevpost", "title_en": "Two"},
+        ]
+
+    async def test_get_unprocessed_articles_empty(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """An empty query result returns an empty list."""
+        collection_ref.where.return_value = _make_query([])
+
+        assert await firestore.get_unprocessed_articles() == []
+
+
+class TestUpdateArticleAfterProcessing:
+    """update_article_after_processing writes extraction results back."""
+
+    async def test_update_article_after_processing_sets_fields(
+        self, mock_db: MagicMock, collection_ref: MagicMock, doc_ref: MagicMock
+    ) -> None:
+        """Extracted fields are camelCased; processed=True, error cleared."""
+        await firestore.update_article_after_processing(DOC_ID, SAMPLE_EXTRACTED)
+
+        collection_ref.document.assert_called_once_with(DOC_ID)
+        doc_ref.update.assert_awaited_once()
+        (updates,) = doc_ref.update.await_args.args
+        assert updates["titleEn"] == "XPeng launches new ADAS"
+        assert updates["bodyEn"] == "Full translation"
+        assert updates["relevanceScore"] == 9
+        assert updates["contentType"] == "news"
+        assert updates["brandsMentioned"] == ["XPeng"]
+        assert updates["vehiclesMentioned"] == ["XPeng P7"]
+        assert updates["featuresExtracted"] == [{"feature_name": "City NOA", "category": "adas"}]
+        assert updates["competitiveSignal"] == "City NOA rollout accelerating."
+        assert updates["processed"] is True
+        assert updates["processingError"] is None
+
+
+class TestSetArticleProcessingError:
+    """set_article_processing_error keeps failed articles in the queue."""
+
+    async def test_set_article_processing_error_sets_error(
+        self, mock_db: MagicMock, collection_ref: MagicMock, doc_ref: MagicMock
+    ) -> None:
+        """processingError is set and processed is left untouched."""
+        await firestore.set_article_processing_error(DOC_ID, "malformed JSON")
+
+        collection_ref.document.assert_called_once_with(DOC_ID)
+        doc_ref.update.assert_awaited_once()
+        (updates,) = doc_ref.update.await_args.args
+        assert updates["processingError"] == "malformed JSON"
+        assert "processed" not in updates
+
+
+class TestSaveHealthMetrics:
+    """save_health_metrics writes run stats to scraper_health."""
+
+    async def test_save_health_metrics_writes_to_collection(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """The doc is camelCased and runTimestamp uses SERVER_TIMESTAMP."""
+        await firestore.save_health_metrics(SAMPLE_METRICS)
+
+        mock_db.collection.assert_called_once_with("scraper_health")
+        collection_ref.add.assert_awaited_once()
+        (data,) = collection_ref.add.await_args.args
+        assert data["sourceName"] == "gasgoo"
+        assert data["status"] == "success"
+        assert data["articlesIngested"] == 12
+        assert data["requestsMade"] == 15
+        assert data["errorCount"] == 0
+        assert data["errors"] == []
+        assert data["durationSeconds"] == 143.2
+        assert data["runTimestamp"] is SERVER_TIMESTAMP
+
+    async def test_save_health_metrics_returns_doc_id(self, mock_db: MagicMock) -> None:
+        """The returned string is the mock doc ref's auto-generated ID."""
+        result = await firestore.save_health_metrics(SAMPLE_METRICS)
+
+        assert result == DOC_ID
+
+
+class TestCaseConversion:
+    """The private case-conversion helpers map field names both ways."""
+
+    @pytest.mark.parametrize(
+        ("snake", "camel"),
+        [
+            ("source_name", "sourceName"),
+            ("source_url", "sourceUrl"),
+            ("title_zh", "titleZh"),
+            ("body_en", "bodyEn"),
+            ("relevance_score", "relevanceScore"),
+            ("features_extracted", "featuresExtracted"),
+            ("duration_seconds", "durationSeconds"),
+            ("processed", "processed"),
+        ],
+    )
+    def test_snake_to_camel_conversion(self, snake: str, camel: str) -> None:
+        """snake_case field names convert to the schema's camelCase names."""
+        assert firestore._snake_to_camel(snake) == camel
+
+    @pytest.mark.parametrize(
+        ("camel", "snake"),
+        [
+            ("sourceName", "source_name"),
+            ("sourceUrl", "source_url"),
+            ("titleZh", "title_zh"),
+            ("bodyEn", "body_en"),
+            ("relevanceScore", "relevance_score"),
+            ("featuresExtracted", "features_extracted"),
+            ("durationSeconds", "duration_seconds"),
+            ("processed", "processed"),
+        ],
+    )
+    def test_camel_to_snake_conversion(self, camel: str, snake: str) -> None:
+        """camelCase document fields convert back to snake_case."""
+        assert firestore._camel_to_snake(camel) == snake
