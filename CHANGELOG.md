@@ -7,6 +7,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Autohome source scraper: Playwright-rendered discovery across the news, tech, and EV listing pages with cross-section URL dedup, article extraction from the Next.js `__NEXT_DATA__` payload with stable-DOM fallbacks, and Beijing-to-UTC date normalization
 - DynamicScraper: headless Chromium via async Playwright with per-request page isolation, networkidle waits, optional wait-for-selector hook, and error-tolerant browser shutdown
 - Baidu News source scraper: keyword search discovery across five Chinese EV/software terms with cross-keyword URL dedup, Chinese relative/absolute listing-date normalization to UTC, and structure-agnostic article extraction with title/body/date fallback chains
 - LLM extraction pipeline: Claude Sonnet translation and structured extraction of unprocessed articles, JSON validation with brace-boundary recovery, exponential-backoff retries, per-article error isolation
