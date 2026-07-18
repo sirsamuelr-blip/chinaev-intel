@@ -17,3 +17,4 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - Update ruff (v0.15.21) and mypy (v1.14.0) pre-commit hook versions; record Context7 3.2.4 in MCP registry and defer GitHub MCP to gh CLI
+- Add dotenv to mypy ignore-missing-imports overrides
