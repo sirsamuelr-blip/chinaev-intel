@@ -7,6 +7,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- StaticScraper: managed async httpx client, HTML parsing via BeautifulSoup, and RSS/Atom feed parsing via feedparser
 - BaseScraper abstract base class: randomized rate limiting, User-Agent rotation, retry with exponential backoff, request logging, and health metrics
 - Project scaffold: backend structure, reference docs, CI pipeline
 - CLAUDE.md progressive disclosure architecture (root + backend + docs/)

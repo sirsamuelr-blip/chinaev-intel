@@ -3,5 +3,6 @@
 from __future__ import annotations
 
 from .base import BaseScraper
+from .static import StaticScraper
 
-__all__ = ["BaseScraper"]
+__all__ = ["BaseScraper", "StaticScraper"]
