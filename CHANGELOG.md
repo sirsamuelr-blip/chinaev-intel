@@ -7,6 +7,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- CnEVPost source scraper: RSS discovery via the WordPress feed, article extraction of title, body, and UTC publish date, with embedded subscription/related-post chrome stripped from the body
 - Gasgoo source scraper: RSS discovery across the Market & Industry, EV, and ICV category feeds with URL dedup, plus article extraction of title, body, and UTC publish date
 - Async Firestore helpers for `articles` and `scraper_health`: save article, dedup check by sourceUrl, unprocessed-article queue, post-processing updates, error recording, health metrics
 - StaticScraper: managed async httpx client, HTML parsing via BeautifulSoup, and RSS/Atom feed parsing via feedparser

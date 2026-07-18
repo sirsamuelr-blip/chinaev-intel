@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .cnevpost import CnEVPostScraper
 from .gasgoo import GasgooScraper
 
-__all__ = ["GasgooScraper"]
+__all__ = ["CnEVPostScraper", "GasgooScraper"]
