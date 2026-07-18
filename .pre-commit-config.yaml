@@ -15,6 +15,7 @@ repos:
         files: ^backend/
         additional_dependencies:
           - types-requests
+          - pytest>=8.0
         args: [--config-file=backend/pyproject.toml]
 
   - repo: https://github.com/gitleaks/gitleaks
