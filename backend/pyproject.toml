@@ -25,7 +25,7 @@ disallow_any_generics = true
 check_untyped_defs = true
 
 [[tool.mypy.overrides]]
-module = ["firebase_admin.*", "google.*", "bs4.*", "feedparser.*"]
+module = ["firebase_admin.*", "google.*", "bs4.*", "feedparser.*", "dotenv.*"]
 ignore_missing_imports = true
 
 [tool.coverage.run]

@@ -4,10 +4,11 @@ Maximum 5 servers. Each consumes context. Document every server here.
 
 | Server | Version | Token Scope | Purpose | Installed |
 |---|---|---|---|---|
-| GitHub | (check with `claude mcp list`) | Fine-grained PAT, repo scope only | PR/issue participation, code review | Yes |
 | Filesystem | built-in | n/a | File read/write (built into Claude Code) | Yes (built-in) |
-| Context7 | (install and record) | n/a | Real-time library docs, reduces hallucination | Pending |
+| Context7 | @upstash/context7-mcp@3.2.4 | n/a | Real-time library docs, reduces hallucination | Yes |
 | Playwright | (install at Phase 3) | n/a | Browser automation for UI verification | Phase 3 |
+
+GitHub MCP deferred — requires GitHub Copilot subscription for the api.githubcopilot.com endpoint. Using gh CLI for GitHub operations instead.
 
 ## Security Rules
 
