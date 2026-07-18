@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
+from .baidu_news import BaiduNewsScraper
 from .cnevpost import CnEVPostScraper
 from .gasgoo import GasgooScraper
 
-__all__ = ["CnEVPostScraper", "GasgooScraper"]
+__all__ = ["BaiduNewsScraper", "CnEVPostScraper", "GasgooScraper"]

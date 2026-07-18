@@ -7,6 +7,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Baidu News source scraper: keyword search discovery across five Chinese EV/software terms with cross-keyword URL dedup, Chinese relative/absolute listing-date normalization to UTC, and structure-agnostic article extraction with title/body/date fallback chains
 - LLM extraction pipeline: Claude Sonnet translation and structured extraction of unprocessed articles, JSON validation with brace-boundary recovery, exponential-backoff retries, per-article error isolation
 - CnEVPost source scraper: RSS discovery via the WordPress feed, article extraction of title, body, and UTC publish date, with embedded subscription/related-post chrome stripped from the body
 - Gasgoo source scraper: RSS discovery across the Market & Industry, EV, and ICV category feeds with URL dedup, plus article extraction of title, body, and UTC publish date
