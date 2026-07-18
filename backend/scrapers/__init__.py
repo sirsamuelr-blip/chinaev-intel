@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from .base import BaseScraper
+from .sources.cnevpost import CnEVPostScraper
 from .sources.gasgoo import GasgooScraper
 from .static import StaticScraper
 
-__all__ = ["BaseScraper", "GasgooScraper", "StaticScraper"]
+__all__ = ["BaseScraper", "CnEVPostScraper", "GasgooScraper", "StaticScraper"]
