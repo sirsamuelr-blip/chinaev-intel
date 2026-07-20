@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from config.settings import MAX_ARTICLES_PER_SOURCE
 from scrapers import runner
 from scrapers.sources.autohome import AutohomeScraper
 from scrapers.sources.baidu_news import BaiduNewsScraper
@@ -282,6 +283,7 @@ class TestRunAllScrapers:
         assert result["sources_run"] == 4
         assert result["total_articles_ingested"] == 4
         assert result["total_errors"] == 0
+        assert result["max_articles_per_source"] == MAX_ARTICLES_PER_SOURCE
         assert len(result["source_results"]) == 4
         for entry in result["source_results"]:
             assert set(entry) == {"source_name", "status", "articles_ingested", "error_count"}
@@ -290,6 +292,48 @@ class TestRunAllScrapers:
             assert isinstance(entry["articles_ingested"], int)
             assert isinstance(entry["error_count"], int)
         assert result["pipeline_result"] == PIPELINE_SUMMARY
+
+    async def test_run_all_scrapers_caps_articles_per_source(
+        self, monkeypatch: pytest.MonkeyPatch, io_mocks: dict[str, AsyncMock]
+    ) -> None:
+        """Only max_articles_per_source new articles are scraped per source."""
+        scraper = _make_scraper(discovered=_entries("source_a", 10))
+        _install_scrapers(monkeypatch, [scraper])
+
+        result = await runner.run_all_scrapers(run_pipeline_after=False, max_articles_per_source=3)
+
+        assert scraper.scrape_article.await_count == 3
+        assert io_mocks["save_article"].await_count == 3
+        assert result["total_articles_ingested"] == 3
+        assert result["max_articles_per_source"] == 3
+
+    async def test_run_all_scrapers_cap_does_not_count_dupes(
+        self, monkeypatch: pytest.MonkeyPatch, io_mocks: dict[str, AsyncMock]
+    ) -> None:
+        """Duplicate articles (already in Firestore) do not count toward the cap."""
+        entries = _entries("source_a", 5)
+        scraper = _make_scraper(discovered=entries)
+        _install_scrapers(monkeypatch, [scraper])
+        # First 2 URLs are already stored; the next 3 are new. Cap = 2.
+        existing_urls = {entries[0]["url"], entries[1]["url"]}
+        io_mocks["article_exists"].side_effect = lambda url: url in existing_urls
+
+        result = await runner.run_all_scrapers(run_pipeline_after=False, max_articles_per_source=2)
+
+        assert scraper.scrape_article.await_count == 2
+        assert io_mocks["save_article"].await_count == 2
+        assert result["total_articles_ingested"] == 2
+
+    async def test_run_all_scrapers_cap_in_summary(
+        self, monkeypatch: pytest.MonkeyPatch, io_mocks: dict[str, AsyncMock]
+    ) -> None:
+        """The effective cap is included in the run summary."""
+        _install_scrapers(monkeypatch, [_make_scraper()])
+
+        result = await runner.run_all_scrapers(run_pipeline_after=False)
+
+        assert "max_articles_per_source" in result
+        assert isinstance(result["max_articles_per_source"], int)
 
     async def test_run_all_scrapers_handles_empty_discovery(
         self, monkeypatch: pytest.MonkeyPatch, io_mocks: dict[str, AsyncMock]
