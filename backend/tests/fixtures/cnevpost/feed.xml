@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+	xmlns:content="http://purl.org/rss/1.0/modules/content/"
+	xmlns:dc="http://purl.org/dc/elements/1.1/"
+	xmlns:atom="http://www.w3.org/2005/Atom"
+>
+<channel>
+	<title>CnEVPost</title>
+	<atom:link href="https://cnevpost.com/feed/" rel="self" type="application/rss+xml" />
+	<link>https://cnevpost.com</link>
+	<description>China EV news placeholder channel description</description>
+	<item>
+		<title>Placeholder EV Maker Day 2026 to be held in Faketown after user vote</title>
+		<link>https://cnevpost.com/2026/07/18/placeholder-ev-maker-day-2026-faketown/</link>
+		<comments>https://cnevpost.com/2026/07/18/placeholder-ev-maker-day-2026-faketown/#respond</comments>
+		<dc:creator><![CDATA[Placeholder Reporter]]></dc:creator>
+		<pubDate>Sat, 18 Jul 2026 14:40:02 +0000</pubDate>
+		<category><![CDATA[Placeholder Brand]]></category>
+		<guid isPermaLink="false">https://cnevpost.com/?p=900001</guid>
+		<description><![CDATA[<p>Placeholder teaser paragraph one about a fake annual event vote.</p>]]></description>
+	</item>
+	<item>
+		<title>Placeholder OEM kicks off fake SUV pre-sales on new platform</title>
+		<link>https://cnevpost.com/2026/07/18/placeholder-oem-kicks-off-fake-suv-pre-sales/</link>
+		<dc:creator><![CDATA[Placeholder Reporter]]></dc:creator>
+		<pubDate>Sat, 18 Jul 2026 14:21:51 +0000</pubDate>
+		<category><![CDATA[Placeholder OEM]]></category>
+		<guid isPermaLink="false">https://cnevpost.com/?p=900002</guid>
+		<description><![CDATA[<p>Placeholder teaser paragraph two about a fake SUV pre-sale.</p>]]></description>
+	</item>
+	<item>
+		<title>Placeholder battery firm in spotlight over fake cell defects</title>
+		<link>https://cnevpost.com/2026/07/18/placeholder-battery-firm-fake-cell-defects/</link>
+		<dc:creator><![CDATA[Placeholder Reporter]]></dc:creator>
+		<pubDate>Sat, 18 Jul 2026 13:43:27 +0000</pubDate>
+		<category><![CDATA[Placeholder Battery]]></category>
+		<guid isPermaLink="false">https://cnevpost.com/?p=900003</guid>
+		<description><![CDATA[<p>Placeholder teaser paragraph three about fake battery defects.</p>]]></description>
+	</item>
+	<item>
+		<title>Fake tax shift is a strong push for placeholder automakers to make own cells</title>
+		<link>https://cnevpost.com/2026/07/18/fake-tax-shift-placeholder-automakers-own-cells/</link>
+		<dc:creator><![CDATA[Placeholder Analyst]]></dc:creator>
+		<pubDate>Sat, 18 Jul 2026 05:15:49 +0000</pubDate>
+		<category><![CDATA[Placeholder Policy]]></category>
+		<guid isPermaLink="false">https://cnevpost.com/?p=900004</guid>
+		<description><![CDATA[<p>Placeholder teaser paragraph four about a fake policy analysis.</p>]]></description>
+	</item>
+</channel>
+</rss>

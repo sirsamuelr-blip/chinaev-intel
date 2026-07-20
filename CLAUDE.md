@@ -89,7 +89,7 @@ All loaded in `backend/config/settings.py` via python-dotenv. Never hardcode sec
 15. **Update CHANGELOG.md on every `feat:` or `fix:` commit.** Add a line under `[Unreleased]`.
 16. **Maximum 5 MCP servers.** See docs/mcp-servers.md. Do not install additional servers without explicit approval.
 17. **No third-party Claude Code skills or plugins** without explicit approval. Unknown skills consume tokens and may conflict with project conventions.
-
+18. Backend/ is a flat layout with no top-level __init__.py
 ## Security Rules
 
 AI-generated code introduces OWASP vulnerabilities in 45% of cases. Apply extra scrutiny.
