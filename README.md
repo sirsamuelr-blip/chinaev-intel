@@ -10,8 +10,9 @@ Automated competitive intelligence pipeline that monitors Chinese EV industry so
 2. Copy `.env.example` to `.env` and fill in API keys
 3. Install Python 3.12
 4. Install dependencies: `cd backend && pip install -r requirements.txt`
-5. Install pre-commit hooks: `pre-commit install && pre-commit install --hook-type commit-msg`
-6. Run tests: `cd backend && pytest`
+5. Install Playwright browsers: `python -m playwright install chromium`
+6. Install pre-commit hooks: `pre-commit install && pre-commit install --hook-type commit-msg`
+7. Run tests: `cd backend && pytest`
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for full development workflow.
 
