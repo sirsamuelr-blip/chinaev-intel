@@ -11,8 +11,10 @@ Anti-bot
     - Static httpx fetches currently succeed as well (the pages are
       server-rendered), but Autohome is historically volatile about JS
       rendering and anti-bot, so this scraper follows the spec and uses
-      DynamicScraper. ``goto(wait_until="networkidle")`` settles in
-      3-12 seconds on every page type, within the default 30s timeout.
+      DynamicScraper. Fetches use ``goto(wait_until="domcontentloaded")``
+      because ``networkidle`` intermittently hangs on persistent
+      analytics/ad connections that never let the network settle; the
+      ``wait_for`` CSS selector signals render completion instead.
 
 Listing pages (/news/, /tech/, /ev/ — all share one structure)
     - Articles render inside ``ul.article`` as ``li[data-artidanchor]``
@@ -109,7 +111,9 @@ class AutohomeScraper(DynamicScraper):
         seen_urls: set[str] = set()
         for section, path in self._LISTING_PATHS.items():
             soup = await self.fetch_and_parse(
-                f"{self.BASE_URL}{path}", wait_for=self._LISTING_WAIT_SELECTOR
+                f"{self.BASE_URL}{path}",
+                wait_for=self._LISTING_WAIT_SELECTOR,
+                wait_until="domcontentloaded",
             )
             if soup is None:
                 self.logger.warning(
@@ -141,7 +145,11 @@ class AutohomeScraper(DynamicScraper):
         dict, or an empty dict when the fetch fails or the page yields no
         title or body.
         """
-        soup = await self.fetch_and_parse(url, wait_for=self._ARTICLE_WAIT_SELECTOR)
+        soup = await self.fetch_and_parse(
+            url,
+            wait_for=self._ARTICLE_WAIT_SELECTOR,
+            wait_until="domcontentloaded",
+        )
         if soup is None:
             self.logger.warning(f"[{self.SOURCE_NAME}] fetch failed for {url}")
             return {}
