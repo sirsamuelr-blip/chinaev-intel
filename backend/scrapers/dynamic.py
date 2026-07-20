@@ -8,7 +8,7 @@ scrapers for JS-rendered pages, infinite scroll, and login walls
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Literal, Self
 
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
@@ -22,6 +22,9 @@ if TYPE_CHECKING:
 
 # Playwright timeouts are in milliseconds.
 DEFAULT_WAIT_TIMEOUT_MS = 30000.0
+
+# Load states accepted by page.goto(wait_until=...).
+WaitUntilState = Literal["commit", "domcontentloaded", "load", "networkidle"]
 
 
 class DynamicScraper(BaseScraper):
@@ -77,16 +80,20 @@ class DynamicScraper(BaseScraper):
         url: str,
         wait_for: str | None = None,
         wait_timeout: float = DEFAULT_WAIT_TIMEOUT_MS,
+        wait_until: WaitUntilState = "networkidle",
     ) -> str | None:
         """Fetch a fully rendered page with rate limiting, UA rotation, and retries.
 
-        Waits for network activity to settle before extracting HTML, and
-        additionally for the ``wait_for`` CSS selector when one is given —
-        the hook for source scrapers that need specific JS-rendered
-        content to appear. Each call opens and closes its own page so no
-        state leaks between requests. Returns the rendered HTML, or None
-        once all retries have failed. Raises RuntimeError if called
-        outside the async context manager.
+        ``wait_until`` controls Playwright's page load strategy and
+        defaults to ``"networkidle"``; source scrapers can pass
+        ``"domcontentloaded"`` for sites with persistent background
+        connections that never go idle. The page additionally waits for
+        the ``wait_for`` CSS selector when one is given — the hook for
+        source scrapers that need specific JS-rendered content to appear.
+        Each call opens and closes its own page so no state leaks between
+        requests. Returns the rendered HTML, or None once all retries
+        have failed. Raises RuntimeError if called outside the async
+        context manager.
         """
         if self._context is None:
             msg = f"{type(self).__name__} must be used as an async context manager"
@@ -97,7 +104,7 @@ class DynamicScraper(BaseScraper):
             page = await context.new_page()
             try:
                 await page.set_extra_http_headers({"User-Agent": self._get_random_ua()})
-                await page.goto(fetch_url, wait_until="networkidle", timeout=wait_timeout)
+                await page.goto(fetch_url, wait_until=wait_until, timeout=wait_timeout)
                 if wait_for is not None:
                     await page.wait_for_selector(wait_for, timeout=wait_timeout)
                 content: str = await page.content()
@@ -117,9 +124,18 @@ class DynamicScraper(BaseScraper):
         url: str,
         wait_for: str | None = None,
         wait_timeout: float = DEFAULT_WAIT_TIMEOUT_MS,
+        wait_until: WaitUntilState = "networkidle",
     ) -> BeautifulSoup | None:
-        """Fetch a rendered page and parse it, or None if the fetch failed."""
-        html = await self.fetch_page(url, wait_for=wait_for, wait_timeout=wait_timeout)
+        """Fetch a rendered page and parse it, or None if the fetch failed.
+
+        ``wait_until`` controls Playwright's page load strategy and
+        defaults to ``"networkidle"``; source scrapers can pass
+        ``"domcontentloaded"`` for sites with persistent background
+        connections that never go idle.
+        """
+        html = await self.fetch_page(
+            url, wait_for=wait_for, wait_timeout=wait_timeout, wait_until=wait_until
+        )
         if html is None:
             return None
         return self.parse_html(html)

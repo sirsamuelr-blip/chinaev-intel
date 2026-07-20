@@ -237,6 +237,7 @@ async def test_discover_articles_uses_wait_for(scraper: AutohomeScraper) -> None
     assert mock_fetch.await_count == len(AutohomeScraper._LISTING_PATHS)
     for call in mock_fetch.await_args_list:
         assert call.kwargs["wait_for"] == "ul.article"
+        assert call.kwargs["wait_until"] == "domcontentloaded"
 
 
 async def test_scrape_article_uses_wait_for(scraper: AutohomeScraper) -> None:
@@ -244,4 +245,6 @@ async def test_scrape_article_uses_wait_for(scraper: AutohomeScraper) -> None:
     with patch.object(scraper, "fetch_and_parse", new_callable=AsyncMock) as mock_fetch:
         mock_fetch.return_value = article_soup
         await scraper.scrape_article(ARTICLE_URL)
-    mock_fetch.assert_awaited_once_with(ARTICLE_URL, wait_for="#parent-container")
+    mock_fetch.assert_awaited_once_with(
+        ARTICLE_URL, wait_for="#parent-container", wait_until="domcontentloaded"
+    )

@@ -26,5 +26,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Docs: phase 3 frontend spec, revenue-critical paths, MCP registry, rollback plan, tech debt register
 
 ### Fixed
+- Autohome article pages no longer timeout on persistent analytics connections; DynamicScraper.fetch_page now accepts a wait_until parameter (default networkidle), and AutohomeScraper uses domcontentloaded with CSS selector waits
 - Update ruff (v0.15.21) and mypy (v1.14.0) pre-commit hook versions; record Context7 3.2.4 in MCP registry and defer GitHub MCP to gh CLI
 - Add dotenv to mypy ignore-missing-imports overrides

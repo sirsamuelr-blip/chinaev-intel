@@ -224,3 +224,33 @@ async def test_fetch_and_parse_passes_wait_params(
     await scraper.fetch_and_parse(PAGE_URL, wait_for="div.content", wait_timeout=5000.0)
     mock_page.goto.assert_awaited_once_with(PAGE_URL, wait_until="networkidle", timeout=5000.0)
     mock_page.wait_for_selector.assert_awaited_once_with("div.content", timeout=5000.0)
+
+
+@pytest.mark.usefixtures("mock_sleep")
+async def test_fetch_page_custom_wait_until(
+    scraper: FakeDynamicScraper, mock_page: AsyncMock
+) -> None:
+    await scraper.fetch_page(PAGE_URL, wait_until="domcontentloaded")
+    mock_page.goto.assert_awaited_once_with(
+        PAGE_URL, wait_until="domcontentloaded", timeout=DEFAULT_WAIT_TIMEOUT_MS
+    )
+
+
+@pytest.mark.usefixtures("mock_sleep")
+async def test_fetch_and_parse_custom_wait_until(
+    scraper: FakeDynamicScraper, mock_page: AsyncMock
+) -> None:
+    await scraper.fetch_and_parse(PAGE_URL, wait_until="domcontentloaded")
+    mock_page.goto.assert_awaited_once_with(
+        PAGE_URL, wait_until="domcontentloaded", timeout=DEFAULT_WAIT_TIMEOUT_MS
+    )
+
+
+@pytest.mark.usefixtures("mock_sleep")
+async def test_fetch_page_default_wait_until(
+    scraper: FakeDynamicScraper, mock_page: AsyncMock
+) -> None:
+    await scraper.fetch_page(PAGE_URL)
+    mock_page.goto.assert_awaited_once_with(
+        PAGE_URL, wait_until="networkidle", timeout=DEFAULT_WAIT_TIMEOUT_MS
+    )
