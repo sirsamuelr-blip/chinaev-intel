@@ -15,6 +15,7 @@ import json
 import logging
 from typing import Any
 
+from config.settings import MAX_ARTICLES_PER_SOURCE
 from db.firestore import article_exists, save_article, save_health_metrics
 from processing.pipeline import run_pipeline
 from scrapers.dynamic import DynamicScraper
@@ -62,17 +63,19 @@ def _determine_status(error_count: int, articles_ingested: int) -> str:
     return "failure"
 
 
-async def _ingest_new_articles(scraper: SourceScraper) -> int:
+async def _ingest_new_articles(scraper: SourceScraper, max_articles: int) -> int:
     """Discover, dedupe, scrape, and save articles for one source.
 
-    Returns the number of new articles written to Firestore. URLs already
-    stored are skipped before scraping (saving requests), and empty scrape
-    results are skipped without saving (the scraper already logged why).
+    Returns the number of new articles written to Firestore, capped at
+    ``max_articles`` per run; already-stored URLs are skipped before
+    scraping (saving requests) and do not count toward the cap. Empty
+    scrape results are skipped without saving (the scraper already
+    logged why).
     """
     source_name = scraper.SOURCE_NAME
     discovered = await scraper.discover_articles()
     articles_ingested = 0
-    for entry in discovered:
+    for i, entry in enumerate(discovered):
         url = entry["url"]
         if await article_exists(url):
             logger.debug(f"[{source_name}] skipping already-stored article {url}")
@@ -82,10 +85,16 @@ async def _ingest_new_articles(scraper: SourceScraper) -> int:
             continue
         await save_article(article)
         articles_ingested += 1
+        if articles_ingested >= max_articles:
+            logger.info(
+                f"[{source_name}] reached cap of {max_articles} articles, "
+                f"stopping ({len(discovered) - i - 1} remaining)"
+            )
+            break
     return articles_ingested
 
 
-async def _run_source(scraper_class: type[SourceScraper]) -> dict[str, Any]:
+async def _run_source(scraper_class: type[SourceScraper], max_articles: int) -> dict[str, Any]:
     """Run one source scraper end to end and record its health metrics.
 
     Never raises: a crash anywhere in the source's run is logged, recorded
@@ -103,7 +112,7 @@ async def _run_source(scraper_class: type[SourceScraper]) -> dict[str, Any]:
         scraper = scraper_class()
         scraper.reset_health_metrics()
         async with scraper:
-            articles_ingested = await _ingest_new_articles(scraper)
+            articles_ingested = await _ingest_new_articles(scraper, max_articles)
     except Exception:  # one source must never crash the whole run
         logger.exception(f"[{source_name}] scraper run crashed")
         crashed = True
@@ -127,20 +136,28 @@ async def _run_source(scraper_class: type[SourceScraper]) -> dict[str, Any]:
     }
 
 
-async def run_all_scrapers(run_pipeline_after: bool = True) -> dict[str, Any]:
+async def run_all_scrapers(
+    run_pipeline_after: bool = True,
+    max_articles_per_source: int | None = None,
+) -> dict[str, Any]:
     """Run every Tier 1 scraper sequentially and return a run summary.
 
     The cron entrypoint flow from docs/scraper-spec.md: for each source,
     discover articles, dedupe against Firestore by URL, scrape and save
-    the new ones, and record health metrics. Afterwards, optionally run
-    the LLM extraction pipeline over the newly ingested articles.
+    the new ones (at most ``max_articles_per_source`` per source, falling
+    back to the ``MAX_ARTICLES_PER_SOURCE`` config default when None),
+    and record health metrics. Afterwards, optionally run the LLM
+    extraction pipeline over the newly ingested articles.
 
     dict[str, Any]: the summary mixes counts, per-source dicts, and the
     optional pipeline result (None when ``run_pipeline_after`` is False).
     """
+    effective_cap = (
+        max_articles_per_source if max_articles_per_source is not None else MAX_ARTICLES_PER_SOURCE
+    )
     source_results: list[dict[str, Any]] = []
     for scraper_class in SCRAPER_CLASSES:
-        source_results.append(await _run_source(scraper_class))
+        source_results.append(await _run_source(scraper_class, effective_cap))
 
     pipeline_result: dict[str, int] | None = None
     if run_pipeline_after:
@@ -155,6 +172,7 @@ async def run_all_scrapers(run_pipeline_after: bool = True) -> dict[str, Any]:
         "sources_run": len(source_results),
         "total_articles_ingested": sum(result["articles_ingested"] for result in source_results),
         "total_errors": sum(result["error_count"] for result in source_results),
+        "max_articles_per_source": effective_cap,
         "source_results": source_results,
         "pipeline_result": pipeline_result,
     }

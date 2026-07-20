@@ -7,6 +7,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Configurable per-source article cap (MAX_ARTICLES_PER_SOURCE, default 25) in the scraper runner; prevents Autohome's 180-article discovery from creating hour-long runs
 - Scraper runner cron entrypoint: sequential execution of all Tier 1 scrapers, Firestore URL dedup before scraping, per-source health metrics with success/partial/failure status, per-source crash isolation, and optional LLM pipeline trigger
 - Autohome source scraper: Playwright-rendered discovery across the news, tech, and EV listing pages with cross-section URL dedup, article extraction from the Next.js `__NEXT_DATA__` payload with stable-DOM fallbacks, and Beijing-to-UTC date normalization
 - DynamicScraper: headless Chromium via async Playwright with per-request page isolation, networkidle waits, optional wait-for-selector hook, and error-tolerant browser shutdown
