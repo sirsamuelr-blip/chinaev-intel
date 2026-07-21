@@ -11,18 +11,13 @@ the pipeline runner yet.
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
 from collections.abc import Callable
 from typing import Any
 
-import anthropic
-from anthropic.types import MessageParam
-
-from config import settings
 from db.firestore import get_all_features, save_signal
 from processing.prompts import build_signal_narrative_message
+from processing.utils import call_claude, parse_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -320,67 +315,15 @@ async def detect_signal_candidates(
     return candidates
 
 
-async def _call_claude(
-    client: anthropic.AsyncAnthropic, messages: list[MessageParam]
-) -> str | None:
-    """Call the Claude API with retries and return the response text.
-
-    Mirrors the retry pattern in ``processing.pipeline`` and
-    ``processing.entities`` (duplication tracked in docs/tech-debt.md for
-    Task 9 consolidation): exponential backoff on any anthropic exception,
-    up to ``settings.MAX_RETRIES`` retries after the initial attempt.
-    Returns None once all attempts are exhausted or the response has no
-    text content.
-    """
-    for attempt in range(settings.MAX_RETRIES + 1):
-        try:
-            response = await client.messages.create(
-                model=settings.SONNET_MODEL,
-                max_tokens=MAX_TOKENS,
-                messages=messages,
-            )
-        except anthropic.AnthropicError as exc:
-            logger.warning(
-                f"claude api call failed attempt={attempt + 1}/{settings.MAX_RETRIES + 1} "
-                f"error={exc}"
-            )
-            if attempt < settings.MAX_RETRIES:
-                await asyncio.sleep(2**attempt)
-            continue
-        if not response.content:
-            logger.error("claude response has no content blocks")
-            return None
-        block = response.content[0]
-        if block.type != "text":
-            logger.error(f"unexpected first content block type: {block.type}")
-            return None
-        return block.text
-    logger.error(f"claude api call failed after {settings.MAX_RETRIES + 1} attempts")
-    return None
-
-
 def _parse_narrative(text: str) -> dict[str, Any] | None:
-    """Parse Claude's narrative response as JSON, salvaging embedded JSON if needed.
+    """Parse Claude's narrative response as JSON and validate the narrative keys.
 
-    Mirrors ``pipeline._parse_extraction``: on a parse failure the fallback
-    slices from the first ``{`` to the last ``}`` and re-parses. Returns
-    None when the result is not a JSON object or misses required keys.
+    Brace-salvage parsing is delegated to
+    ``processing.utils.parse_json_object``; this adds the
+    narrative-specific required-key validation.
     """
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end <= start:
-            logger.error("narrative response contains no JSON object")
-            return None
-        try:
-            parsed = json.loads(text[start : end + 1])
-        except json.JSONDecodeError as exc:
-            logger.error(f"failed to parse narrative response as JSON: {exc}")
-            return None
-    if not isinstance(parsed, dict):
-        logger.error(f"narrative response is not a JSON object: {type(parsed).__name__}")
+    parsed = parse_json_object(text)
+    if parsed is None:
         return None
     missing = NARRATIVE_REQUIRED_KEYS - parsed.keys()
     if missing:
@@ -400,7 +343,6 @@ async def generate_signal_narrative(
     into a copy of the candidate. Returns None on any failure — API errors
     after retries or malformed/incomplete JSON. Never raises.
     """
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
     messages = build_signal_narrative_message(
         signal_type=str(candidate.get("signal_type") or ""),
         headline=str(article.get("titleEn") or article.get("title") or ""),
@@ -409,7 +351,7 @@ async def generate_signal_narrative(
         features=[str(feature) for feature in candidate.get("features_mentioned") or []],
         trigger_data=candidate.get("trigger_data") or {},
     )
-    text = await _call_claude(client, messages)
+    text = await call_claude(messages, max_tokens=MAX_TOKENS)
     if text is None:
         return None
     narrative = _parse_narrative(text)

@@ -1,10 +1,11 @@
 """Tests for the scraper runner orchestration.
 
 Everything external is mocked: the scraper classes are replaced with
-mock factories on ``runner.SCRAPER_CLASSES``, and the Firestore helpers
-and LLM pipeline are monkeypatched on the runner module. These tests
-verify orchestration only — sequencing, dedup, saving, health logging,
-crash isolation, and the pipeline hand-off — not scraper behavior.
+mock factories on ``runner.SCRAPER_CLASSES``, and the Firestore helpers,
+LLM pipeline, and Phase 2 module entry points are monkeypatched on the
+runner module. These tests verify orchestration only — sequencing, dedup,
+saving, health logging, crash isolation, and the pipeline and Phase 2
+hand-offs — not the underlying module behavior.
 """
 
 from __future__ import annotations
@@ -34,6 +35,49 @@ SCRAPED_ARTICLE = {
 }
 
 PIPELINE_SUMMARY = {"total": 2, "succeeded": 2, "failed": 0}
+
+# Shaped like get_recent_processed_articles output: snake_case keys plus id.
+RECENT_ARTICLES_SNAKE: list[dict[str, Any]] = [
+    {
+        "id": "art-1",
+        "source_name": "gasgoo",
+        "title_en": "BYD Launches City NOA",
+        "brands_mentioned": ["BYD"],
+        "is_duplicate": False,
+    },
+    {
+        "id": "art-2",
+        "source_name": "cnevpost",
+        "title_en": "BYD Rolls Out City NOA",
+        "brands_mentioned": ["BYD"],
+        "is_duplicate": False,
+    },
+]
+
+PROMOTE_COUNTS = {"brands_promoted": 1, "vehicles_promoted": 1, "features_promoted": 2}
+
+DEDUP_RESULT: dict[str, Any] = {
+    "total_compared": 2,
+    "duplicate_groups_found": 1,
+    "articles_marked_duplicate": 1,
+    "groups": [
+        {
+            "duplicate_group_id": "group-1",
+            "canonical_id": "art-1",
+            "duplicate_ids": ["art-2"],
+            "similarity_scores": [0.93],
+        }
+    ],
+}
+
+SIGNALS_SUMMARY: dict[str, Any] = {
+    "articles_processed": 1,
+    "articles_skipped_duplicate": 0,
+    "candidates_detected": 1,
+    "signals_generated": 1,
+    "signals_failed": 0,
+    "signals_by_type": {"new_feature_launch": 1},
+}
 
 
 def _entries(source_name: str, count: int) -> list[dict[str, str]]:
@@ -118,6 +162,36 @@ def io_mocks(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
         "save_article": AsyncMock(return_value="doc-1"),
         "save_health_metrics": AsyncMock(return_value="health-1"),
         "run_pipeline": AsyncMock(return_value=dict(PIPELINE_SUMMARY)),
+    }
+    for name, mock in mocks.items():
+        monkeypatch.setattr(runner, name, mock)
+    return mocks
+
+
+@pytest.fixture
+def phase2_mocks(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
+    """Mock the Firestore reads and Phase 2 module entry points on the runner.
+
+    ``keys_to_camel`` stays real — the snake_case -> camelCase bridge is
+    runner behavior under test, not an external call.
+    """
+    mocks = {
+        "get_recent_processed_articles": AsyncMock(
+            return_value=[dict(article) for article in RECENT_ARTICLES_SNAKE]
+        ),
+        "promote_entities_from_article": AsyncMock(return_value=dict(PROMOTE_COUNTS)),
+        "deduplicate_articles": AsyncMock(return_value=DEDUP_RESULT),
+        "mark_duplicates": AsyncMock(return_value=2),
+        "detect_signals_from_articles": AsyncMock(return_value=dict(SIGNALS_SUMMARY)),
+        "score_article_batch": AsyncMock(
+            return_value=[{"article_id": "art-1", "novelty_score": 0.8}]
+        ),
+        "get_recent_signals": AsyncMock(
+            return_value=[{"id": "sig-1", "signal_type": "new_feature_launch"}]
+        ),
+        "score_signal_batch": AsyncMock(
+            return_value=[{"signal_id": "sig-1", "novelty_score": 0.9}]
+        ),
     }
     for name, mock in mocks.items():
         monkeypatch.setattr(runner, name, mock)
@@ -362,3 +436,151 @@ class TestRunAllScrapers:
 
         io_mocks["save_article"].assert_awaited_once_with(SCRAPED_ARTICLE)
         assert result["total_articles_ingested"] == 1
+
+    async def test_run_all_scrapers_with_phase2(
+        self, monkeypatch: pytest.MonkeyPatch, io_mocks: dict[str, AsyncMock]
+    ) -> None:
+        """run_phase2_after=True runs Phase 2 after the pipeline and reports it."""
+        _install_scrapers(monkeypatch, [_make_scraper()])
+        phase2_summary = {"articles_fetched": 2, "errors": []}
+        phase2 = AsyncMock(return_value=dict(phase2_summary))
+        monkeypatch.setattr(runner, "run_phase2_processing", phase2)
+
+        result = await runner.run_all_scrapers(run_phase2_after=True)
+
+        phase2.assert_awaited_once()
+        io_mocks["run_pipeline"].assert_awaited_once()
+        assert result["phase2_result"] == phase2_summary
+
+    async def test_run_all_scrapers_without_phase2(
+        self, monkeypatch: pytest.MonkeyPatch, io_mocks: dict[str, AsyncMock]
+    ) -> None:
+        """The default run never touches Phase 2 (existing cron behavior)."""
+        _install_scrapers(monkeypatch, [_make_scraper()])
+        phase2 = AsyncMock()
+        monkeypatch.setattr(runner, "run_phase2_processing", phase2)
+
+        result = await runner.run_all_scrapers()
+
+        phase2.assert_not_awaited()
+        assert result["phase2_result"] is None
+
+
+class TestRunPhase2Processing:
+    """run_phase2_processing orchestrates the Phase 2 intelligence steps."""
+
+    async def test_run_phase2_processing_runs_all_steps(
+        self, phase2_mocks: dict[str, AsyncMock]
+    ) -> None:
+        """All four steps execute and report into the summary."""
+        summary = await runner.run_phase2_processing()
+
+        phase2_mocks["get_recent_processed_articles"].assert_awaited_once_with(
+            hours=runner.PHASE2_LOOKBACK_HOURS
+        )
+        assert summary["articles_fetched"] == 2
+        assert summary["errors"] == []
+        assert summary["entity_promotion"] is not None
+        assert summary["dedup"] is not None
+        assert summary["signals"] is not None
+        assert summary["novelty"] is not None
+
+    async def test_run_phase2_processing_entity_promotion_runs(
+        self, phase2_mocks: dict[str, AsyncMock]
+    ) -> None:
+        """Every fetched article goes through entity promotion; counts are summed."""
+        summary = await runner.run_phase2_processing()
+
+        assert phase2_mocks["promote_entities_from_article"].await_count == 2
+        assert summary["entity_promotion"] == {
+            "articles_processed": 2,
+            "brands_promoted": 2,
+            "vehicles_promoted": 2,
+            "features_promoted": 4,
+        }
+
+    async def test_run_phase2_processing_dedup_runs(
+        self, phase2_mocks: dict[str, AsyncMock]
+    ) -> None:
+        """Dedup analysis runs and its groups are persisted via mark_duplicates."""
+        summary = await runner.run_phase2_processing()
+
+        phase2_mocks["deduplicate_articles"].assert_awaited_once()
+        phase2_mocks["mark_duplicates"].assert_awaited_once_with(DEDUP_RESULT["groups"])
+        assert summary["dedup"] == {
+            "duplicate_groups_found": 1,
+            "articles_marked_duplicate": 1,
+            "documents_updated": 2,
+        }
+
+    async def test_run_phase2_processing_signals_runs(
+        self, phase2_mocks: dict[str, AsyncMock]
+    ) -> None:
+        """Signal detection runs over non-duplicates, including this run's dedups."""
+        summary = await runner.run_phase2_processing()
+
+        phase2_mocks["detect_signals_from_articles"].assert_awaited_once()
+        call = phase2_mocks["detect_signals_from_articles"].await_args
+        assert call is not None
+        (passed_articles,) = call.args
+        assert [article["id"] for article in passed_articles] == ["art-1"]
+        assert summary["signals"] == SIGNALS_SUMMARY
+
+    async def test_run_phase2_processing_novelty_runs(
+        self, phase2_mocks: dict[str, AsyncMock]
+    ) -> None:
+        """Novelty scoring covers the article batch and newly generated signals."""
+        summary = await runner.run_phase2_processing()
+
+        phase2_mocks["score_article_batch"].assert_awaited_once()
+        phase2_mocks["get_recent_signals"].assert_awaited_once_with(
+            days=runner.NEW_SIGNAL_LOOKBACK_DAYS
+        )
+        phase2_mocks["score_signal_batch"].assert_awaited_once()
+        assert summary["novelty"] == {"articles_scored": 1, "signals_scored": 1}
+
+    async def test_run_phase2_processing_step_failure_continues(
+        self, phase2_mocks: dict[str, AsyncMock]
+    ) -> None:
+        """One step failing is recorded and never blocks the steps after it."""
+        phase2_mocks["deduplicate_articles"].side_effect = RuntimeError("firestore exploded")
+
+        summary = await runner.run_phase2_processing()
+
+        assert summary["errors"] == ["dedup"]
+        assert summary["dedup"] is None
+        assert phase2_mocks["promote_entities_from_article"].await_count == 2
+        phase2_mocks["detect_signals_from_articles"].assert_awaited_once()
+        phase2_mocks["score_article_batch"].assert_awaited_once()
+        phase2_mocks["score_signal_batch"].assert_awaited_once()
+
+    async def test_run_phase2_processing_converts_keys_for_dedup(
+        self, phase2_mocks: dict[str, AsyncMock]
+    ) -> None:
+        """The snake_case db reads are bridged to camelCase before dedup."""
+        await runner.run_phase2_processing()
+
+        call = phase2_mocks["deduplicate_articles"].await_args
+        assert call is not None
+        (articles,) = call.args
+        first = articles[0]
+        assert first["id"] == "art-1"
+        assert first["titleEn"] == "BYD Launches City NOA"
+        assert first["brandsMentioned"] == ["BYD"]
+        assert "title_en" not in first
+        assert "brands_mentioned" not in first
+
+    async def test_run_phase2_processing_fetch_failure_aborts_cleanly(
+        self, phase2_mocks: dict[str, AsyncMock]
+    ) -> None:
+        """A failed article fetch returns an empty summary without running steps."""
+        phase2_mocks["get_recent_processed_articles"].side_effect = RuntimeError("db down")
+
+        summary = await runner.run_phase2_processing()
+
+        assert summary["errors"] == ["fetch_articles"]
+        assert summary["articles_fetched"] == 0
+        phase2_mocks["promote_entities_from_article"].assert_not_awaited()
+        phase2_mocks["deduplicate_articles"].assert_not_awaited()
+        phase2_mocks["detect_signals_from_articles"].assert_not_awaited()
+        phase2_mocks["score_article_batch"].assert_not_awaited()

@@ -7,6 +7,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Full Phase 2 pipeline integration: entity promotion, dedup, signal detection, and novelty scoring wired into runner (opt-in via `--phase2`)
+- Shared Claude API retry helper extracted to `processing/utils.py`
 - Competitive comparison engine: feature matrix, timeline, brand comparison, and price-feature analysis
 - Novelty scoring module for articles and signals with configurable lookback windows
 - 36kr scraper for Chinese tech/startup news with auto sector coverage

@@ -5,8 +5,10 @@ Covers ``articles`` and ``scraper_health`` (Phase 1 scraper pipeline) plus
 Firestore client is initialized lazily on first use so tests can swap in a
 mock without touching real Firebase credentials. Python code uses
 snake_case keys; Firestore documents use camelCase (see
-docs/firestore-schema.md) — the private ``_keys_to_camel`` /
-``_keys_to_snake`` helpers convert at the read/write boundary.
+docs/firestore-schema.md) — the ``keys_to_camel`` / ``_keys_to_snake``
+helpers convert at the read/write boundary. ``keys_to_camel`` is public:
+the runner uses it to bridge db-layer reads into the camelCase doc shape
+the Phase 2 modules expect.
 """
 
 from __future__ import annotations
@@ -69,7 +71,7 @@ def _camel_to_snake(name: str) -> str:
 
 # Firestore document values are heterogeneous (str, int, bool, list, map, ...),
 # so dict values are typed as Any throughout this module.
-def _keys_to_camel(data: dict[str, Any]) -> dict[str, Any]:
+def keys_to_camel(data: dict[str, Any]) -> dict[str, Any]:
     """Return a copy of ``data`` with top-level keys converted to camelCase."""
     return {_snake_to_camel(key): value for key, value in data.items()}
 
@@ -86,7 +88,7 @@ async def save_article(article: dict[str, Any]) -> str:
     ``processingError`` to None: every article starts in the unprocessed
     queue for the LLM pipeline.
     """
-    data = _keys_to_camel(article)
+    data = keys_to_camel(article)
     data["processed"] = False
     data["processingError"] = None
     _, doc_ref = await get_db().collection(ARTICLES_COLLECTION).add(data)
@@ -143,7 +145,7 @@ async def update_article_after_processing(doc_id: str, extracted_data: dict[str,
     features_extracted, competitive_signal); keys are converted to
     camelCase. ``processingError`` is cleared.
     """
-    updates = _keys_to_camel(extracted_data)
+    updates = keys_to_camel(extracted_data)
     updates["processed"] = True
     updates["processingError"] = None
     await get_db().collection(ARTICLES_COLLECTION).document(doc_id).update(updates)
@@ -297,7 +299,7 @@ async def _upsert(
     doc is created — existing docs never have them overwritten. Returns the
     doc ID.
     """
-    payload = _keys_to_camel(data)
+    payload = keys_to_camel(data)
     payload["lastUpdated"] = SERVER_TIMESTAMP
     existing = await _find_one(collection, match)
     if existing is not None:
@@ -459,7 +461,7 @@ async def save_signal(signal_data: dict[str, Any]) -> str:
     converted to camelCase. ``createdDate`` is set to the server timestamp
     and ``status`` defaults to "pending" (see docs/firestore-schema.md).
     """
-    data = _keys_to_camel(signal_data)
+    data = keys_to_camel(signal_data)
     data["createdDate"] = SERVER_TIMESTAMP
     data.setdefault("status", "pending")
     _, doc_ref = await get_db().collection(SIGNALS_COLLECTION).add(data)
@@ -521,7 +523,7 @@ async def save_health_metrics(metrics: dict[str, Any]) -> str:
     Keys are converted to camelCase and ``runTimestamp`` is set to the
     Firestore server timestamp.
     """
-    data = _keys_to_camel(metrics)
+    data = keys_to_camel(metrics)
     data["runTimestamp"] = SERVER_TIMESTAMP
     _, doc_ref = await get_db().collection(SCRAPER_HEALTH_COLLECTION).add(data)
     doc_id = str(doc_ref.id)

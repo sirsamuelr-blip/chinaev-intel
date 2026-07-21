@@ -1,8 +1,10 @@
 """Tests for the LLM extraction pipeline.
 
 All external calls are mocked — the Anthropic client is a MagicMock with an
-async ``messages.create``, and every Firestore helper is monkeypatched on the
-pipeline module. No real API calls, no real database calls, no real sleeps.
+async ``messages.create`` (installed by patching ``anthropic.AsyncAnthropic``,
+which the shared ``processing.utils.call_claude`` helper constructs), and
+every Firestore helper is monkeypatched on the pipeline module. No real API
+calls, no real database calls, no real sleeps.
 """
 
 from __future__ import annotations
@@ -70,6 +72,11 @@ def _make_failing_client(error: Exception) -> MagicMock:
     return client
 
 
+def _install_client(monkeypatch: pytest.MonkeyPatch, client: MagicMock) -> None:
+    """Route ``processing.utils.call_claude``'s client construction to ``client``."""
+    monkeypatch.setattr(anthropic, "AsyncAnthropic", MagicMock(return_value=client))
+
+
 @pytest.fixture
 def no_sleep(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     """Replace asyncio.sleep so retry backoff runs instantly."""
@@ -105,11 +112,12 @@ class TestPrompts:
 class TestProcessArticle:
     """process_article calls Claude, parses JSON, and validates the result."""
 
-    async def test_process_article_success(self) -> None:
+    async def test_process_article_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A valid JSON response is parsed and returned as a dict."""
         client = _make_client(json.dumps(SAMPLE_EXTRACTION))
+        _install_client(monkeypatch, client)
 
-        result = await pipeline.process_article(SAMPLE_ARTICLE, client)
+        result = await pipeline.process_article(SAMPLE_ARTICLE)
 
         assert result == SAMPLE_EXTRACTION
         client.messages.create.assert_awaited_once()
@@ -118,52 +126,65 @@ class TestProcessArticle:
         assert call_kwargs["max_tokens"] == 4096
         assert SAMPLE_ARTICLE["title"] in call_kwargs["messages"][0]["content"]
 
-    async def test_process_article_validates_required_keys(self) -> None:
+    async def test_process_article_validates_required_keys(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A response missing a required key returns None."""
         incomplete = {k: v for k, v in SAMPLE_EXTRACTION.items() if k != "relevance_score"}
-        client = _make_client(json.dumps(incomplete))
+        _install_client(monkeypatch, _make_client(json.dumps(incomplete)))
 
-        assert await pipeline.process_article(SAMPLE_ARTICLE, client) is None
+        assert await pipeline.process_article(SAMPLE_ARTICLE) is None
 
-    async def test_process_article_handles_json_with_preamble(self) -> None:
+    async def test_process_article_handles_json_with_preamble(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """JSON embedded in surrounding text is extracted and parsed."""
         text = f"Here is the extraction:\n{json.dumps(SAMPLE_EXTRACTION)}\nDone."
-        client = _make_client(text)
+        _install_client(monkeypatch, _make_client(text))
 
-        result = await pipeline.process_article(SAMPLE_ARTICLE, client)
+        result = await pipeline.process_article(SAMPLE_ARTICLE)
 
         assert result == SAMPLE_EXTRACTION
 
-    async def test_process_article_handles_invalid_json(self) -> None:
+    async def test_process_article_handles_invalid_json(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A non-JSON response returns None instead of raising."""
-        client = _make_client("I could not process this article, sorry.")
+        _install_client(monkeypatch, _make_client("I could not process this article, sorry."))
 
-        assert await pipeline.process_article(SAMPLE_ARTICLE, client) is None
+        assert await pipeline.process_article(SAMPLE_ARTICLE) is None
 
-    async def test_process_article_retries_on_api_error(self, no_sleep: AsyncMock) -> None:
+    async def test_process_article_retries_on_api_error(
+        self, monkeypatch: pytest.MonkeyPatch, no_sleep: AsyncMock
+    ) -> None:
         """API errors are retried up to MAX_RETRIES extra attempts."""
         client = _make_failing_client(anthropic.AnthropicError("server overloaded"))
+        _install_client(monkeypatch, client)
 
-        await pipeline.process_article(SAMPLE_ARTICLE, client)
+        await pipeline.process_article(SAMPLE_ARTICLE)
 
         assert client.messages.create.await_count == settings.MAX_RETRIES + 1
 
     async def test_process_article_returns_none_after_retries_exhausted(
-        self, no_sleep: AsyncMock
+        self, monkeypatch: pytest.MonkeyPatch, no_sleep: AsyncMock
     ) -> None:
         """A persistently failing API call returns None."""
         client = _make_failing_client(anthropic.AnthropicError("server overloaded"))
+        _install_client(monkeypatch, client)
 
-        assert await pipeline.process_article(SAMPLE_ARTICLE, client) is None
+        assert await pipeline.process_article(SAMPLE_ARTICLE) is None
 
     async def test_process_article_never_logs_api_key(
-        self, no_sleep: AsyncMock, caplog: pytest.LogCaptureFixture
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        no_sleep: AsyncMock,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Failure logging never includes the API key."""
-        client = _make_failing_client(anthropic.AnthropicError("auth error"))
+        _install_client(monkeypatch, _make_failing_client(anthropic.AnthropicError("auth error")))
 
         with caplog.at_level("DEBUG"):
-            await pipeline.process_article(SAMPLE_ARTICLE, client)
+            await pipeline.process_article(SAMPLE_ARTICLE)
 
         assert len(caplog.records) > 0
         assert settings.ANTHROPIC_API_KEY not in caplog.text
@@ -174,7 +195,7 @@ class TestRunPipeline:
 
     @pytest.fixture
     def firestore_mocks(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
-        """Mock the Firestore helpers and Anthropic client construction."""
+        """Mock the Firestore helpers on the pipeline module."""
         mocks = {
             "get_unprocessed_articles": AsyncMock(return_value=[]),
             "update_article_after_processing": AsyncMock(),
@@ -182,7 +203,6 @@ class TestRunPipeline:
         }
         for name, mock in mocks.items():
             monkeypatch.setattr(pipeline, name, mock)
-        monkeypatch.setattr(anthropic, "AsyncAnthropic", MagicMock())
         return mocks
 
     def _articles(self, count: int) -> list[dict[str, Any]]:

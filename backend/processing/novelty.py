@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from db.firestore import _keys_to_camel, get_recent_processed_articles, get_recent_signals
+from db.firestore import get_recent_processed_articles, get_recent_signals, keys_to_camel
 from processing.dedup import extract_feature_categories, jaccard_similarity, title_similarity
 
 logger = logging.getLogger(__name__)
@@ -159,9 +159,9 @@ async def score_article_batch(
     recent: list[dict[str, Any]] = []
     try:
         fetched = await get_recent_processed_articles(hours=lookback_days * 24)
-        # The db layer returns snake_case keys (docs/tech-debt.md) but the
-        # scoring functions compare camelCase Firestore doc fields.
-        recent = [_keys_to_camel(item) for item in fetched]
+        # The db layer returns snake_case keys but the scoring functions
+        # compare camelCase Firestore doc fields.
+        recent = [keys_to_camel(item) for item in fetched]
     except Exception:
         logger.exception("failed to fetch recent articles, scoring against empty set")
     results: list[dict[str, Any]] = []
