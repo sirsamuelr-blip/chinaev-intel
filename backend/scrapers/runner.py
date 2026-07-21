@@ -42,6 +42,7 @@ from scrapers.sources.baidu_news import BaiduNewsScraper
 from scrapers.sources.cnevpost import CnEVPostScraper
 from scrapers.sources.dongchedi import DongchediScraper
 from scrapers.sources.gasgoo import GasgooScraper
+from scrapers.sources.xiaohongshu import XiaoHongShuScraper
 from scrapers.static import StaticScraper
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,7 @@ SCRAPER_CLASSES: list[type[SourceScraper]] = [
     AutohomeScraper,
     ThirtySixKrScraper,
     DongchediScraper,
+    XiaoHongShuScraper,
 ]
 
 # Phase 2 operates on articles processed within this window: wide enough to
