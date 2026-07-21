@@ -1,6 +1,6 @@
 """Tests for the scraper runner orchestration.
 
-Everything external is mocked: the four scraper classes are replaced with
+Everything external is mocked: the scraper classes are replaced with
 mock factories on ``runner.SCRAPER_CLASSES``, and the Firestore helpers
 and LLM pipeline are monkeypatched on the runner module. These tests
 verify orchestration only — sequencing, dedup, saving, health logging,
@@ -16,6 +16,7 @@ import pytest
 
 from config.settings import MAX_ARTICLES_PER_SOURCE
 from scrapers import runner
+from scrapers.sources._36kr import ThirtySixKrScraper
 from scrapers.sources.autohome import AutohomeScraper
 from scrapers.sources.baidu_news import BaiduNewsScraper
 from scrapers.sources.cnevpost import CnEVPostScraper
@@ -127,12 +128,13 @@ class TestScraperRegistry:
     """The real scraper registry, before any mocking."""
 
     def test_scraper_classes_registered_in_build_order(self) -> None:
-        """All four Tier 1 scrapers are registered in the spec's build order."""
+        """All registered scrapers appear in the spec's build order."""
         assert runner.SCRAPER_CLASSES == [
             GasgooScraper,
             CnEVPostScraper,
             BaiduNewsScraper,
             AutohomeScraper,
+            ThirtySixKrScraper,
         ]
 
 
