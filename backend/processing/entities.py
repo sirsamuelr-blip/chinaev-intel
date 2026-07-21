@@ -9,15 +9,11 @@ This module is standalone — it is not wired into the pipeline runner yet.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from pathlib import Path
 from typing import Any
 
-import anthropic
-
-from config import settings
 from db.firestore import (
     get_brand_by_name_en,
     upsert_brand,
@@ -25,6 +21,7 @@ from db.firestore import (
     upsert_vehicle,
 )
 from processing.prompts import build_brand_resolution_message
+from processing.utils import call_claude
 
 logger = logging.getLogger(__name__)
 
@@ -64,41 +61,6 @@ def resolve_brand_name(name: str, aliases: dict[str, Any]) -> str | None:
     return lowered.get(name.strip().lower())
 
 
-async def _call_claude(client: anthropic.AsyncAnthropic, message: str) -> str | None:
-    """Call the Claude API with retries and return the response text.
-
-    Mirrors the retry pattern in ``processing.pipeline``: exponential backoff
-    on any anthropic exception, up to ``settings.MAX_RETRIES`` retries after
-    the initial attempt. Returns None once all attempts are exhausted or the
-    response has no text content.
-    """
-    for attempt in range(settings.MAX_RETRIES + 1):
-        try:
-            response = await client.messages.create(
-                model=settings.SONNET_MODEL,
-                max_tokens=MAX_TOKENS,
-                messages=[{"role": "user", "content": message}],
-            )
-        except anthropic.AnthropicError as exc:
-            logger.warning(
-                f"claude api call failed attempt={attempt + 1}/{settings.MAX_RETRIES + 1} "
-                f"error={exc}"
-            )
-            if attempt < settings.MAX_RETRIES:
-                await asyncio.sleep(2**attempt)
-            continue
-        if not response.content:
-            logger.error("claude response has no content blocks")
-            return None
-        block = response.content[0]
-        if block.type != "text":
-            logger.error(f"unexpected first content block type: {block.type}")
-            return None
-        return block.text
-    logger.error(f"claude api call failed after {settings.MAX_RETRIES + 1} attempts")
-    return None
-
-
 def _parse_resolution(text: str) -> dict[str, Any] | None:
     """Parse the brand resolution response from Claude.
 
@@ -128,8 +90,10 @@ async def resolve_brand_with_fallback(name: str, aliases: dict[str, Any]) -> str
     canonical = resolve_brand_name(name, aliases)
     if canonical is not None:
         return canonical
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-    text = await _call_claude(client, build_brand_resolution_message(name))
+    text = await call_claude(
+        [{"role": "user", "content": build_brand_resolution_message(name)}],
+        max_tokens=MAX_TOKENS,
+    )
     if text is None:
         logger.warning(f"llm brand resolution failed name={name}")
         return None

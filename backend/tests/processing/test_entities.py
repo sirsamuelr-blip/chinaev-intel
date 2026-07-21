@@ -2,7 +2,8 @@
 
 All external calls are mocked — the Firestore helpers are monkeypatched on
 the entities module (matching the ``test_pipeline`` pattern) and the Claude
-fallback is stubbed via ``entities._call_claude``. Alias resolution tests use
+fallback is stubbed via the ``call_claude`` name entities imports from
+``processing.utils``. Alias resolution tests use
 an in-test dictionary; ``load_aliases`` tests read the real JSON file.
 """
 
@@ -76,7 +77,7 @@ def db_mocks(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
         "upsert_brand": AsyncMock(return_value="brand-1"),
         "upsert_vehicle": AsyncMock(return_value="vehicle-1"),
         "upsert_feature": AsyncMock(return_value="feature-1"),
-        "_call_claude": AsyncMock(return_value="null"),
+        "call_claude": AsyncMock(return_value="null"),
     }
     for name, mock in mocks.items():
         monkeypatch.setattr(entities, name, mock)
@@ -144,13 +145,13 @@ class TestResolveBrandWithFallback:
         result = await entities.resolve_brand_with_fallback("比亚迪", SAMPLE_ALIASES)
 
         assert result == "BYD"
-        db_mocks["_call_claude"].assert_not_awaited()
+        db_mocks["call_claude"].assert_not_awaited()
 
     async def test_resolve_brand_with_fallback_llm_success(
         self, db_mocks: dict[str, AsyncMock]
     ) -> None:
         """A Sonnet resolution returns the canonical name."""
-        db_mocks["_call_claude"].return_value = json.dumps(
+        db_mocks["call_claude"].return_value = json.dumps(
             {"name_en": "Onvo", "name_zh": "乐道", "parent_group": "NIO"}
         )
 
@@ -166,7 +167,7 @@ class TestResolveBrandWithFallback:
         self, db_mocks: dict[str, AsyncMock]
     ) -> None:
         """An exhausted or unparseable LLM call returns None."""
-        db_mocks["_call_claude"].return_value = None
+        db_mocks["call_claude"].return_value = None
 
         assert await entities.resolve_brand_with_fallback("Mystery", SAMPLE_ALIASES) is None
 
