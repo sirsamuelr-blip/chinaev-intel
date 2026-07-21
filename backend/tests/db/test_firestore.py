@@ -671,6 +671,38 @@ class TestGetSignalsByArticleId:
         assert await firestore.get_signals_by_article_id("doc-none") == []
 
 
+class TestGetRecentSignals:
+    """get_recent_signals feeds the novelty scoring comparison window."""
+
+    async def test_get_recent_signals_returns_list(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """Signals inside the window are returned; stale ones drop."""
+        recent = datetime.now(UTC) - timedelta(days=2)
+        stale = datetime.now(UTC) - timedelta(days=30)
+        query = _make_query(
+            [
+                _make_snapshot("sig-1", {"signalType": "ai_integration", "createdDate": recent}),
+                _make_snapshot("sig-2", {"signalType": "ota_deployment", "createdDate": stale}),
+            ]
+        )
+        collection_ref.order_by.return_value = query
+
+        result = await firestore.get_recent_signals(days=14)
+
+        mock_db.collection.assert_called_once_with("signals")
+        collection_ref.order_by.assert_called_once_with("createdDate", direction="DESCENDING")
+        assert result == [{"id": "sig-1", "signal_type": "ai_integration", "created_date": recent}]
+
+    async def test_get_recent_signals_empty(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """An empty query result returns an empty list."""
+        collection_ref.order_by.return_value = _make_query([])
+
+        assert await firestore.get_recent_signals() == []
+
+
 class TestGetAllFeatures:
     """get_all_features feeds the signal detection trickle-down check."""
 

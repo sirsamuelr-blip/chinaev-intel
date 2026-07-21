@@ -433,6 +433,30 @@ async def get_signals_by_article_id(article_id: str) -> list[dict[str, Any]]:
     return signals
 
 
+async def get_recent_signals(days: int = 14) -> list[dict[str, Any]]:
+    """Return signals created within the last ``days`` days.
+
+    Newest first. Each dict has snake_case keys plus an ``id`` key holding
+    the document ID. This is the novelty scoring module's read path.
+
+    The date window is filtered in Python rather than in the query,
+    matching ``get_recent_processed_articles``: the recent signal set is
+    small enough that over-fetching is cheaper than range-filter plumbing.
+    """
+    query = get_db().collection(SIGNALS_COLLECTION).order_by("createdDate", direction="DESCENDING")
+    snapshots = await query.get()
+    cutoff = datetime.now(UTC) - timedelta(days=days)
+    signals: list[dict[str, Any]] = []
+    for snapshot in snapshots:
+        signal = _keys_to_snake(snapshot.to_dict() or {})
+        created_date = _to_aware_datetime(signal.get("created_date"))
+        if created_date is None or created_date < cutoff:
+            continue
+        signal["id"] = snapshot.id
+        signals.append(signal)
+    return signals
+
+
 async def save_health_metrics(metrics: dict[str, Any]) -> str:
     """Write a scraper health document and return its auto-generated doc ID.
 
