@@ -31,6 +31,7 @@ SCRAPER_HEALTH_COLLECTION = "scraper_health"
 BRANDS_COLLECTION = "brands"
 VEHICLES_COLLECTION = "vehicles"
 FEATURES_COLLECTION = "features"
+SIGNALS_COLLECTION = "signals"
 
 _db: AsyncClient | None = None
 
@@ -370,6 +371,66 @@ async def upsert_feature(feature_data: dict[str, Any]) -> str:
         feature_data,
         create_only={"firstSeenDate": SERVER_TIMESTAMP},
     )
+
+
+async def get_all_features(category: str | None = None) -> list[dict[str, Any]]:
+    """Return all feature docs, optionally filtered by ``category``.
+
+    Each dict has snake_case keys plus an ``id`` key holding the document
+    ID. This is the signal detection module's read path for the
+    trickle-down check.
+    """
+    query: Any = get_db().collection(FEATURES_COLLECTION)  # google types are Any
+    if category is not None:
+        query = query.where(filter=FieldFilter("category", "==", category))
+    snapshots = await query.get()
+    features: list[dict[str, Any]] = []
+    for snapshot in snapshots:
+        feature = _keys_to_snake(snapshot.to_dict() or {})
+        feature["id"] = snapshot.id
+        features.append(feature)
+    return features
+
+
+async def save_signal(signal_data: dict[str, Any]) -> str:
+    """Write a new signal document and return its auto-generated doc ID.
+
+    ``signal_data`` holds snake_case fields (signal_type, title, summary,
+    brands_mentioned, features_mentioned, source_article_ids,
+    implications_for_western_oems, competitive_impact_score); keys are
+    converted to camelCase. ``createdDate`` is set to the server timestamp
+    and ``status`` defaults to "pending" (see docs/firestore-schema.md).
+    """
+    data = _keys_to_camel(signal_data)
+    data["createdDate"] = SERVER_TIMESTAMP
+    data.setdefault("status", "pending")
+    _, doc_ref = await get_db().collection(SIGNALS_COLLECTION).add(data)
+    doc_id = str(doc_ref.id)
+    logger.info(
+        f"saved signal type={signal_data.get('signal_type')} "
+        f"score={signal_data.get('competitive_impact_score')} doc_id={doc_id}"
+    )
+    return doc_id
+
+
+async def get_signals_by_article_id(article_id: str) -> list[dict[str, Any]]:
+    """Return all signals whose ``sourceArticleIds`` array contains this article.
+
+    Each dict has snake_case keys plus an ``id`` key holding the document
+    ID. Used to check which signals an article has already produced.
+    """
+    query = (
+        get_db()
+        .collection(SIGNALS_COLLECTION)
+        .where(filter=FieldFilter("sourceArticleIds", "array_contains", article_id))
+    )
+    snapshots = await query.get()
+    signals: list[dict[str, Any]] = []
+    for snapshot in snapshots:
+        signal = _keys_to_snake(snapshot.to_dict() or {})
+        signal["id"] = snapshot.id
+        signals.append(signal)
+    return signals
 
 
 async def save_health_metrics(metrics: dict[str, Any]) -> str:

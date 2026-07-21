@@ -7,6 +7,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Signal detection module: rule-based triggers for 6 signal types with LLM narrative generation
+- Signal narrative prompt template for competitive intelligence brief entries
+- Firestore CRUD methods for signals collection
 - Cross-source article deduplication using multi-signal similarity scoring
 - Firestore CRUD for dedup field updates and recent article queries
 - Entity promotion module: resolves and upserts brands, vehicles, features from processed articles

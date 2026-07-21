@@ -589,6 +589,130 @@ class TestUpsertFeature:
         assert updates["lastUpdated"] is SERVER_TIMESTAMP
 
 
+SAMPLE_SIGNAL = {
+    "signal_type": "new_feature_launch",
+    "title": "BYD brings city NOA to the Seal",
+    "summary": "BYD is rolling urban NOA out to its volume sedan.",
+    "brands_mentioned": ["BYD"],
+    "features_mentioned": ["City NOA"],
+    "source_article_ids": ["doc-1"],
+    "implications_for_western_oems": "ADAS is reaching mass-market price points.",
+    "competitive_impact_score": 7,
+}
+
+
+class TestSaveSignal:
+    """save_signal writes camelCased docs to the signals collection."""
+
+    async def test_save_signal_creates_doc(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """The doc lands in signals with createdDate and a pending status."""
+        await firestore.save_signal(SAMPLE_SIGNAL)
+
+        mock_db.collection.assert_called_once_with("signals")
+        collection_ref.add.assert_awaited_once()
+        (data,) = collection_ref.add.await_args.args
+        assert data["createdDate"] is SERVER_TIMESTAMP
+        assert data["status"] == "pending"
+
+    async def test_save_signal_returns_doc_id(self, mock_db: MagicMock) -> None:
+        """The returned string is the mock doc ref's auto-generated ID."""
+        result = await firestore.save_signal(SAMPLE_SIGNAL)
+
+        assert result == DOC_ID
+
+    async def test_save_signal_applies_camel_case(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """Snake_case input fields are stored under camelCase names."""
+        await firestore.save_signal(SAMPLE_SIGNAL)
+
+        (data,) = collection_ref.add.await_args.args
+        assert data["signalType"] == "new_feature_launch"
+        assert data["brandsMentioned"] == ["BYD"]
+        assert data["featuresMentioned"] == ["City NOA"]
+        assert data["sourceArticleIds"] == ["doc-1"]
+        assert data["implicationsForWesternOems"] == "ADAS is reaching mass-market price points."
+        assert data["competitiveImpactScore"] == 7
+        assert "signal_type" not in data
+
+
+class TestGetSignalsByArticleId:
+    """get_signals_by_article_id queries via array_contains on sourceArticleIds."""
+
+    async def test_get_signals_found(self, mock_db: MagicMock, collection_ref: MagicMock) -> None:
+        """Matching docs come back with snake_case keys and their IDs."""
+        collection_ref.where.return_value = _make_query(
+            [
+                _make_snapshot(
+                    "sig-1", {"signalType": "ai_integration", "sourceArticleIds": ["doc-1"]}
+                )
+            ]
+        )
+
+        result = await firestore.get_signals_by_article_id("doc-1")
+
+        assert result == [
+            {"id": "sig-1", "signal_type": "ai_integration", "source_article_ids": ["doc-1"]}
+        ]
+        mock_db.collection.assert_called_once_with("signals")
+        field_filter = collection_ref.where.call_args.kwargs["filter"]
+        assert field_filter.field_path == "sourceArticleIds"
+        assert field_filter.op_string == "array_contains"
+        assert field_filter.value == "doc-1"
+
+    async def test_get_signals_not_found(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """No matching signals returns an empty list."""
+        collection_ref.where.return_value = _make_query([])
+
+        assert await firestore.get_signals_by_article_id("doc-none") == []
+
+
+class TestGetAllFeatures:
+    """get_all_features feeds the signal detection trickle-down check."""
+
+    async def test_get_all_features_no_filter(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """Without a category the whole collection is fetched, unfiltered."""
+        collection_ref.get = AsyncMock(
+            return_value=[_make_snapshot("feat-1", {"brandNameEn": "XPENG", "category": "adas"})]
+        )
+
+        result = await firestore.get_all_features()
+
+        assert result == [{"id": "feat-1", "brand_name_en": "XPENG", "category": "adas"}]
+        mock_db.collection.assert_called_once_with("features")
+        collection_ref.where.assert_not_called()
+
+    async def test_get_all_features_with_category_filter(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """With a category an equality filter is applied."""
+        collection_ref.where.return_value = _make_query(
+            [_make_snapshot("feat-1", {"brandNameEn": "XPENG", "category": "adas"})]
+        )
+
+        result = await firestore.get_all_features(category="adas")
+
+        assert result == [{"id": "feat-1", "brand_name_en": "XPENG", "category": "adas"}]
+        field_filter = collection_ref.where.call_args.kwargs["filter"]
+        assert field_filter.field_path == "category"
+        assert field_filter.op_string == "=="
+        assert field_filter.value == "adas"
+
+    async def test_get_all_features_empty(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """An empty collection returns an empty list."""
+        collection_ref.get = AsyncMock(return_value=[])
+
+        assert await firestore.get_all_features() == []
+
+
 class TestCaseConversion:
     """The private case-conversion helpers map field names both ways."""
 
