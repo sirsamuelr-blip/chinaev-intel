@@ -21,6 +21,7 @@ from scrapers.sources._36kr import ThirtySixKrScraper
 from scrapers.sources.autohome import AutohomeScraper
 from scrapers.sources.baidu_news import BaiduNewsScraper
 from scrapers.sources.cnevpost import CnEVPostScraper
+from scrapers.sources.dongchedi import DongchediScraper
 from scrapers.sources.gasgoo import GasgooScraper
 
 SCRAPED_ARTICLE = {
@@ -209,6 +210,7 @@ class TestScraperRegistry:
             BaiduNewsScraper,
             AutohomeScraper,
             ThirtySixKrScraper,
+            DongchediScraper,
         ]
 
 
