@@ -7,6 +7,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Novelty scoring module for articles and signals with configurable lookback windows
 - Signal detection module: rule-based triggers for 6 signal types with LLM narrative generation
 - Signal narrative prompt template for competitive intelligence brief entries
 - Firestore CRUD methods for signals collection
