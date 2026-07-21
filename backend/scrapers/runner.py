@@ -1,6 +1,6 @@
-"""Scraper runner: the cron entrypoint for the Phase 1 data pipeline.
+"""Scraper runner: the cron entrypoint for the data pipeline.
 
-Runs every Tier 1 source scraper sequentially (never parallel), dedupes
+Runs every registered source scraper sequentially (never parallel), dedupes
 discovered URLs against Firestore before scraping, writes new articles to
 the ``articles`` collection, records per-source health metrics in the
 ``scraper_health`` collection, and optionally triggers the LLM extraction
@@ -19,6 +19,7 @@ from config.settings import MAX_ARTICLES_PER_SOURCE
 from db.firestore import article_exists, save_article, save_health_metrics
 from processing.pipeline import run_pipeline
 from scrapers.dynamic import DynamicScraper
+from scrapers.sources._36kr import ThirtySixKrScraper
 from scrapers.sources.autohome import AutohomeScraper
 from scrapers.sources.baidu_news import BaiduNewsScraper
 from scrapers.sources.cnevpost import CnEVPostScraper
@@ -36,6 +37,7 @@ SCRAPER_CLASSES: list[type[SourceScraper]] = [
     CnEVPostScraper,
     BaiduNewsScraper,
     AutohomeScraper,
+    ThirtySixKrScraper,
 ]
 
 
@@ -140,7 +142,7 @@ async def run_all_scrapers(
     run_pipeline_after: bool = True,
     max_articles_per_source: int | None = None,
 ) -> dict[str, Any]:
-    """Run every Tier 1 scraper sequentially and return a run summary.
+    """Run every registered scraper sequentially and return a run summary.
 
     The cron entrypoint flow from docs/scraper-spec.md: for each source,
     discover articles, dedupe against Firestore by URL, scrape and save
