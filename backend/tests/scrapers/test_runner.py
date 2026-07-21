@@ -23,6 +23,7 @@ from scrapers.sources.baidu_news import BaiduNewsScraper
 from scrapers.sources.cnevpost import CnEVPostScraper
 from scrapers.sources.dongchedi import DongchediScraper
 from scrapers.sources.gasgoo import GasgooScraper
+from scrapers.sources.xiaohongshu import XiaoHongShuScraper
 
 SCRAPED_ARTICLE = {
     "source_name": "source_a",
@@ -211,6 +212,7 @@ class TestScraperRegistry:
             AutohomeScraper,
             ThirtySixKrScraper,
             DongchediScraper,
+            XiaoHongShuScraper,
         ]
 
 

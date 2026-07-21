@@ -7,6 +7,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- XiaoHongShu scraper for consumer EV reviews and owner experiences (Playwright)
 - Dongchedi scraper for ByteDance automotive platform coverage (Playwright)
 - Full Phase 2 pipeline integration: entity promotion, dedup, signal detection, and novelty scoring wired into runner (opt-in via `--phase2`)
 - Shared Claude API retry helper extracted to `processing/utils.py`
