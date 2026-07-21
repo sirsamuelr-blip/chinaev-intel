@@ -71,6 +71,7 @@ def _make_snapshot(doc_id: str, data: dict[str, Any]) -> MagicMock:
 def _make_query(results: list[MagicMock]) -> MagicMock:
     """Build a mock query whose chained calls return itself and yield ``results``."""
     query = MagicMock()
+    query.where.return_value = query
     query.order_by.return_value = query
     query.limit.return_value = query
     query.get = AsyncMock(return_value=results)
@@ -270,6 +271,233 @@ class TestSaveHealthMetrics:
         result = await firestore.save_health_metrics(SAMPLE_METRICS)
 
         assert result == DOC_ID
+
+
+SAMPLE_BRAND = {
+    "name_en": "BYD",
+    "name_zh": "比亚迪",
+    "parent_group": "BYD",
+    "ev_focus": False,
+}
+
+SAMPLE_VEHICLE = {
+    "brand_id": "brand-1",
+    "brand_name_en": "BYD",
+    "model_name_en": "Seal",
+}
+
+SAMPLE_FEATURE = {
+    "brand_id": "brand-1",
+    "brand_name_en": "BYD",
+    "feature_name_en": "City NOA",
+    "category": "adas",
+    "description": "Urban navigate-on-autopilot",
+    "supplier": None,
+    "launch_type": "new",
+}
+
+
+class TestGetBrandByNameEn:
+    """get_brand_by_name_en looks up brands by canonical English name."""
+
+    async def test_get_brand_by_name_en_found(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """A matching doc is returned with snake_case keys and its ID."""
+        collection_ref.where.return_value = _make_query(
+            [_make_snapshot("brand-1", {"nameEn": "BYD", "nameZh": "比亚迪"})]
+        )
+
+        result = await firestore.get_brand_by_name_en("BYD")
+
+        assert result == {"id": "brand-1", "name_en": "BYD", "name_zh": "比亚迪"}
+        mock_db.collection.assert_called_once_with("brands")
+        field_filter = collection_ref.where.call_args.kwargs["filter"]
+        assert field_filter.field_path == "nameEn"
+        assert field_filter.op_string == "=="
+        assert field_filter.value == "BYD"
+
+    async def test_get_brand_by_name_en_not_found(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """No match returns None."""
+        collection_ref.where.return_value = _make_query([])
+
+        assert await firestore.get_brand_by_name_en("Tesla") is None
+
+
+class TestUpsertBrand:
+    """upsert_brand creates or updates brand docs keyed by nameEn."""
+
+    async def test_upsert_brand_creates_new(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """With no existing doc the brand is added with camelCase fields."""
+        collection_ref.where.return_value = _make_query([])
+
+        result = await firestore.upsert_brand(SAMPLE_BRAND)
+
+        assert result == DOC_ID
+        collection_ref.add.assert_awaited_once()
+        (data,) = collection_ref.add.await_args.args
+        assert data["nameEn"] == "BYD"
+        assert data["nameZh"] == "比亚迪"
+        assert data["parentGroup"] == "BYD"
+        assert data["evFocus"] is False
+        assert data["lastUpdated"] is SERVER_TIMESTAMP
+        assert "name_en" not in data
+
+    async def test_upsert_brand_updates_existing(
+        self, mock_db: MagicMock, collection_ref: MagicMock, doc_ref: MagicMock
+    ) -> None:
+        """With an existing doc the brand is updated in place."""
+        collection_ref.where.return_value = _make_query(
+            [_make_snapshot("brand-1", {"nameEn": "BYD"})]
+        )
+
+        result = await firestore.upsert_brand(SAMPLE_BRAND)
+
+        assert result == "brand-1"
+        collection_ref.add.assert_not_awaited()
+        collection_ref.document.assert_called_once_with("brand-1")
+        doc_ref.update.assert_awaited_once()
+        (updates,) = doc_ref.update.await_args.args
+        assert updates["nameEn"] == "BYD"
+        assert updates["lastUpdated"] is SERVER_TIMESTAMP
+
+
+class TestGetVehicleByModel:
+    """get_vehicle_by_model looks up vehicles by brand ID and model name."""
+
+    async def test_get_vehicle_by_model_found(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """A matching doc is returned; both equality filters are applied."""
+        query = _make_query(
+            [_make_snapshot("veh-1", {"brandId": "brand-1", "modelNameEn": "Seal"})]
+        )
+        collection_ref.where.return_value = query
+
+        result = await firestore.get_vehicle_by_model("brand-1", "Seal")
+
+        assert result == {"id": "veh-1", "brand_id": "brand-1", "model_name_en": "Seal"}
+        mock_db.collection.assert_called_once_with("vehicles")
+        first_filter = collection_ref.where.call_args.kwargs["filter"]
+        assert first_filter.field_path == "brandId"
+        assert first_filter.value == "brand-1"
+        second_filter = query.where.call_args.kwargs["filter"]
+        assert second_filter.field_path == "modelNameEn"
+        assert second_filter.value == "Seal"
+
+    async def test_get_vehicle_by_model_not_found(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """No match returns None."""
+        collection_ref.where.return_value = _make_query([])
+
+        assert await firestore.get_vehicle_by_model("brand-1", "Nonexistent") is None
+
+
+class TestUpsertVehicle:
+    """upsert_vehicle creates or updates vehicles keyed by brand + model."""
+
+    async def test_upsert_vehicle_creates_new(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """With no existing doc the vehicle is added with camelCase fields."""
+        collection_ref.where.return_value = _make_query([])
+
+        result = await firestore.upsert_vehicle(SAMPLE_VEHICLE)
+
+        assert result == DOC_ID
+        collection_ref.add.assert_awaited_once()
+        (data,) = collection_ref.add.await_args.args
+        assert data["brandId"] == "brand-1"
+        assert data["brandNameEn"] == "BYD"
+        assert data["modelNameEn"] == "Seal"
+        assert data["lastUpdated"] is SERVER_TIMESTAMP
+
+    async def test_upsert_vehicle_updates_existing(
+        self, mock_db: MagicMock, collection_ref: MagicMock, doc_ref: MagicMock
+    ) -> None:
+        """With an existing doc the vehicle is updated in place."""
+        collection_ref.where.return_value = _make_query(
+            [_make_snapshot("veh-1", {"brandId": "brand-1", "modelNameEn": "Seal"})]
+        )
+
+        result = await firestore.upsert_vehicle(SAMPLE_VEHICLE)
+
+        assert result == "veh-1"
+        collection_ref.add.assert_not_awaited()
+        collection_ref.document.assert_called_once_with("veh-1")
+        doc_ref.update.assert_awaited_once()
+
+
+class TestGetFeature:
+    """get_feature looks up features by brand ID, feature name, and category."""
+
+    async def test_get_feature_found(self, mock_db: MagicMock, collection_ref: MagicMock) -> None:
+        """A matching doc is returned; all three equality filters are applied."""
+        query = _make_query(
+            [_make_snapshot("feat-1", {"brandId": "brand-1", "featureNameEn": "City NOA"})]
+        )
+        collection_ref.where.return_value = query
+
+        result = await firestore.get_feature("brand-1", "City NOA", "adas")
+
+        assert result == {"id": "feat-1", "brand_id": "brand-1", "feature_name_en": "City NOA"}
+        mock_db.collection.assert_called_once_with("features")
+        first_filter = collection_ref.where.call_args.kwargs["filter"]
+        assert first_filter.field_path == "brandId"
+        chained_paths = [call.kwargs["filter"].field_path for call in query.where.call_args_list]
+        assert chained_paths == ["featureNameEn", "category"]
+
+    async def test_get_feature_not_found(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """No match returns None."""
+        collection_ref.where.return_value = _make_query([])
+
+        assert await firestore.get_feature("brand-1", "Unknown", "adas") is None
+
+
+class TestUpsertFeature:
+    """upsert_feature creates or updates features, protecting firstSeenDate."""
+
+    async def test_upsert_feature_creates_new_with_first_seen_date(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """A new feature doc gets firstSeenDate set to the server timestamp."""
+        collection_ref.where.return_value = _make_query([])
+
+        result = await firestore.upsert_feature(SAMPLE_FEATURE)
+
+        assert result == DOC_ID
+        collection_ref.add.assert_awaited_once()
+        (data,) = collection_ref.add.await_args.args
+        assert data["brandId"] == "brand-1"
+        assert data["featureNameEn"] == "City NOA"
+        assert data["category"] == "adas"
+        assert data["launchType"] == "new"
+        assert data["firstSeenDate"] is SERVER_TIMESTAMP
+        assert data["lastUpdated"] is SERVER_TIMESTAMP
+
+    async def test_upsert_feature_updates_without_overwriting_first_seen_date(
+        self, mock_db: MagicMock, collection_ref: MagicMock, doc_ref: MagicMock
+    ) -> None:
+        """An existing feature doc is updated without touching firstSeenDate."""
+        collection_ref.where.return_value = _make_query(
+            [_make_snapshot("feat-1", {"featureNameEn": "City NOA"})]
+        )
+
+        result = await firestore.upsert_feature(SAMPLE_FEATURE)
+
+        assert result == "feat-1"
+        collection_ref.add.assert_not_awaited()
+        doc_ref.update.assert_awaited_once()
+        (updates,) = doc_ref.update.await_args.args
+        assert "firstSeenDate" not in updates
+        assert updates["lastUpdated"] is SERVER_TIMESTAMP
 
 
 class TestCaseConversion:

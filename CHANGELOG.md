@@ -7,6 +7,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Entity promotion module: resolves and upserts brands, vehicles, features from processed articles
+- Brand alias dictionary with 40+ Chinese EV brands and suppliers
+- Firestore CRUD methods for brands, vehicles, and features collections
 - ADRs: signal detection approach (#003), deduplication strategy (#004), entity resolution strategy (#005)
 - Configurable per-source article cap (MAX_ARTICLES_PER_SOURCE, default 25) in the scraper runner; prevents Autohome's 180-article discovery from creating hour-long runs
 - Scraper runner cron entrypoint: sequential execution of all Tier 1 scrapers, Firestore URL dedup before scraping, per-source health metrics with success/partial/failure status, per-source crash isolation, and optional LLM pipeline trigger
