@@ -7,6 +7,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Competitive comparison engine: feature matrix, timeline, brand comparison, and price-feature analysis
 - Novelty scoring module for articles and signals with configurable lookback windows
 - 36kr scraper for Chinese tech/startup news with auto sector coverage
 - Signal detection module: rule-based triggers for 6 signal types with LLM narrative generation

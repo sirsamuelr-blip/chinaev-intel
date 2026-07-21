@@ -745,6 +745,98 @@ class TestGetAllFeatures:
         assert await firestore.get_all_features() == []
 
 
+class TestGetVehiclesByBrand:
+    """get_vehicles_by_brand feeds the comparison module's per-brand reads."""
+
+    async def test_get_vehicles_by_brand_found(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """Matching docs come back with snake_case keys and their IDs."""
+        collection_ref.where.return_value = _make_query(
+            [_make_snapshot("veh-1", {"brandNameEn": "BYD", "modelNameEn": "Seal"})]
+        )
+
+        result = await firestore.get_vehicles_by_brand("BYD")
+
+        assert result == [{"id": "veh-1", "brand_name_en": "BYD", "model_name_en": "Seal"}]
+        mock_db.collection.assert_called_once_with("vehicles")
+        field_filter = collection_ref.where.call_args.kwargs["filter"]
+        assert field_filter.field_path == "brandNameEn"
+        assert field_filter.op_string == "=="
+        assert field_filter.value == "BYD"
+
+    async def test_get_vehicles_by_brand_not_found(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """No matching vehicles returns an empty list."""
+        collection_ref.where.return_value = _make_query([])
+
+        assert await firestore.get_vehicles_by_brand("Tesla") == []
+
+
+class TestGetAllVehicles:
+    """get_all_vehicles feeds the price-to-feature analysis."""
+
+    async def test_get_all_vehicles_no_filter(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """Without a segment the whole collection is fetched, unfiltered."""
+        collection_ref.get = AsyncMock(
+            return_value=[_make_snapshot("veh-1", {"brandNameEn": "BYD", "modelNameEn": "Seal"})]
+        )
+
+        result = await firestore.get_all_vehicles()
+
+        assert result == [{"id": "veh-1", "brand_name_en": "BYD", "model_name_en": "Seal"}]
+        mock_db.collection.assert_called_once_with("vehicles")
+        collection_ref.where.assert_not_called()
+
+    async def test_get_all_vehicles_with_segment_filter(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """With a segment an equality filter is applied."""
+        collection_ref.where.return_value = _make_query(
+            [_make_snapshot("veh-1", {"brandNameEn": "NIO", "segment": "SUV"})]
+        )
+
+        result = await firestore.get_all_vehicles(segment="SUV")
+
+        assert result == [{"id": "veh-1", "brand_name_en": "NIO", "segment": "SUV"}]
+        field_filter = collection_ref.where.call_args.kwargs["filter"]
+        assert field_filter.field_path == "segment"
+        assert field_filter.op_string == "=="
+        assert field_filter.value == "SUV"
+
+
+class TestGetFeaturesByBrand:
+    """get_features_by_brand feeds the comparison module's per-brand reads."""
+
+    async def test_get_features_by_brand_found(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """Matching docs come back with snake_case keys and their IDs."""
+        collection_ref.where.return_value = _make_query(
+            [_make_snapshot("feat-1", {"brandNameEn": "BYD", "featureNameEn": "City NOA"})]
+        )
+
+        result = await firestore.get_features_by_brand("BYD")
+
+        assert result == [{"id": "feat-1", "brand_name_en": "BYD", "feature_name_en": "City NOA"}]
+        mock_db.collection.assert_called_once_with("features")
+        field_filter = collection_ref.where.call_args.kwargs["filter"]
+        assert field_filter.field_path == "brandNameEn"
+        assert field_filter.op_string == "=="
+        assert field_filter.value == "BYD"
+
+    async def test_get_features_by_brand_not_found(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """No matching features returns an empty list."""
+        collection_ref.where.return_value = _make_query([])
+
+        assert await firestore.get_features_by_brand("Tesla") == []
+
+
 class TestCaseConversion:
     """The private case-conversion helpers map field names both ways."""
 

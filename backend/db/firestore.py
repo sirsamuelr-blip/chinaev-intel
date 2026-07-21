@@ -392,6 +392,64 @@ async def get_all_features(category: str | None = None) -> list[dict[str, Any]]:
     return features
 
 
+async def get_features_by_brand(brand_name_en: str) -> list[dict[str, Any]]:
+    """Return all feature docs with this ``brandNameEn``.
+
+    Each dict has snake_case keys plus an ``id`` key holding the document
+    ID. This is the comparison module's per-brand feature read path.
+    """
+    query = (
+        get_db()
+        .collection(FEATURES_COLLECTION)
+        .where(filter=FieldFilter("brandNameEn", "==", brand_name_en))
+    )
+    snapshots = await query.get()
+    features: list[dict[str, Any]] = []
+    for snapshot in snapshots:
+        feature = _keys_to_snake(snapshot.to_dict() or {})
+        feature["id"] = snapshot.id
+        features.append(feature)
+    return features
+
+
+async def get_vehicles_by_brand(brand_name_en: str) -> list[dict[str, Any]]:
+    """Return all vehicle docs with this ``brandNameEn``.
+
+    Each dict has snake_case keys plus an ``id`` key holding the document
+    ID. This is the comparison module's per-brand vehicle read path.
+    """
+    query = (
+        get_db()
+        .collection(VEHICLES_COLLECTION)
+        .where(filter=FieldFilter("brandNameEn", "==", brand_name_en))
+    )
+    snapshots = await query.get()
+    vehicles: list[dict[str, Any]] = []
+    for snapshot in snapshots:
+        vehicle = _keys_to_snake(snapshot.to_dict() or {})
+        vehicle["id"] = snapshot.id
+        vehicles.append(vehicle)
+    return vehicles
+
+
+async def get_all_vehicles(segment: str | None = None) -> list[dict[str, Any]]:
+    """Return all vehicle docs, optionally filtered by ``segment``.
+
+    Each dict has snake_case keys plus an ``id`` key holding the document
+    ID. This is the price-to-feature analysis read path.
+    """
+    query: Any = get_db().collection(VEHICLES_COLLECTION)  # google types are Any
+    if segment is not None:
+        query = query.where(filter=FieldFilter("segment", "==", segment))
+    snapshots = await query.get()
+    vehicles: list[dict[str, Any]] = []
+    for snapshot in snapshots:
+        vehicle = _keys_to_snake(snapshot.to_dict() or {})
+        vehicle["id"] = snapshot.id
+        vehicles.append(vehicle)
+    return vehicles
+
+
 async def save_signal(signal_data: dict[str, Any]) -> str:
     """Write a new signal document and return its auto-generated doc ID.
 
