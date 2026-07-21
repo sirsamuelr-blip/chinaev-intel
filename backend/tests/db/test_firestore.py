@@ -9,6 +9,7 @@ network. The mock client mirrors Firestore's chained API:
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -243,6 +244,94 @@ class TestSetArticleProcessingError:
         (updates,) = doc_ref.update.await_args.args
         assert updates["processingError"] == "malformed JSON"
         assert "processed" not in updates
+
+
+class TestGetRecentProcessedArticles:
+    """get_recent_processed_articles feeds the dedup comparison window."""
+
+    async def test_get_recent_processed_articles_returns_list(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """Processed articles inside the window are returned; stale ones drop."""
+        recent = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
+        stale = (datetime.now(UTC) - timedelta(hours=100)).isoformat()
+        query = _make_query(
+            [
+                _make_snapshot("doc-1", {"sourceName": "gasgoo", "scrapeDate": recent}),
+                _make_snapshot("doc-2", {"sourceName": "cnevpost", "scrapeDate": stale}),
+            ]
+        )
+        collection_ref.where.return_value = query
+
+        articles = await firestore.get_recent_processed_articles(hours=72)
+
+        mock_db.collection.assert_called_once_with("articles")
+        field_filter = collection_ref.where.call_args.kwargs["filter"]
+        assert field_filter.field_path == "processed"
+        assert field_filter.op_string == "=="
+        assert field_filter.value is True
+        query.order_by.assert_called_once_with("scrapeDate", direction="DESCENDING")
+        assert articles == [{"id": "doc-1", "source_name": "gasgoo", "scrape_date": recent}]
+
+    async def test_get_recent_processed_articles_empty(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """An empty query result returns an empty list."""
+        collection_ref.where.return_value = _make_query([])
+
+        assert await firestore.get_recent_processed_articles() == []
+
+
+class TestUpdateArticleDedupFields:
+    """update_article_dedup_fields writes ADR 004 dedup fields."""
+
+    async def test_update_article_dedup_fields_sets_all_fields(
+        self, mock_db: MagicMock, collection_ref: MagicMock, doc_ref: MagicMock
+    ) -> None:
+        """All three camelCase dedup fields land in a single update."""
+        await firestore.update_article_dedup_fields(
+            DOC_ID,
+            is_duplicate=True,
+            canonical_article_id="doc-canonical",
+            duplicate_group_id="group-1",
+        )
+
+        collection_ref.document.assert_called_once_with(DOC_ID)
+        doc_ref.update.assert_awaited_once()
+        (updates,) = doc_ref.update.await_args.args
+        assert updates == {
+            "isDuplicate": True,
+            "canonicalArticleId": "doc-canonical",
+            "duplicateGroupId": "group-1",
+        }
+
+
+class TestGetArticlesByDuplicateGroup:
+    """get_articles_by_duplicate_group returns a duplicate cluster."""
+
+    async def test_get_articles_by_duplicate_group_found(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """Matching docs come back with snake_case keys and their IDs."""
+        collection_ref.where.return_value = _make_query(
+            [_make_snapshot("doc-1", {"duplicateGroupId": "group-1", "isDuplicate": True})]
+        )
+
+        result = await firestore.get_articles_by_duplicate_group("group-1")
+
+        assert result == [{"id": "doc-1", "duplicate_group_id": "group-1", "is_duplicate": True}]
+        field_filter = collection_ref.where.call_args.kwargs["filter"]
+        assert field_filter.field_path == "duplicateGroupId"
+        assert field_filter.op_string == "=="
+        assert field_filter.value == "group-1"
+
+    async def test_get_articles_by_duplicate_group_not_found(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """No matching group returns an empty list."""
+        collection_ref.where.return_value = _make_query([])
+
+        assert await firestore.get_articles_by_duplicate_group("missing-group") == []
 
 
 class TestSaveHealthMetrics:
