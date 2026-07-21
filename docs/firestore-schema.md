@@ -84,8 +84,11 @@ Composite indexes: `brandId + category`, `category + firstSeenDate`, `brandId + 
 | brandsMentioned | array\<string\> | Brand names found in the article |
 | vehiclesMentioned | array\<string\> | Specific model names found |
 | featuresExtracted | array\<map\> | Embedded array of extracted feature objects (see llm-pipeline.md for shape) |
+| isDuplicate | boolean | True if this article is a cross-source duplicate of an earlier article (ADR 004) |
+| canonicalArticleId | string | Doc ID of the canonical article in the duplicate group. Null on canonical articles. |
+| duplicateGroupId | string | Shared ID across all articles in the same duplicate cluster |
 
-Composite indexes: `sourceName + scrapeDate`, `relevanceScore`, `processed`
+Composite indexes: `sourceName + scrapeDate`, `relevanceScore`, `processed`, `duplicateGroupId`
 
 ## `signals` collection
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from google.cloud.firestore import SERVER_TIMESTAMP
@@ -163,6 +164,104 @@ async def set_article_processing_error(doc_id: str, error_message: str) -> None:
         .update({"processingError": error_message})
     )
     logger.warning(f"processing error doc_id={doc_id} error={error_message}")
+
+
+def _to_aware_datetime(value: Any) -> datetime | None:
+    """Coerce an ISO 8601 string or datetime doc value to a timezone-aware datetime.
+
+    Naive datetimes are assumed UTC. Returns None for anything else —
+    callers treat unparseable dates as missing rather than raising.
+    """
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
+
+
+async def get_recent_processed_articles(hours: int = 72) -> list[dict[str, Any]]:
+    """Return processed articles scraped within the last ``hours`` hours.
+
+    Newest scrape first. Each dict has snake_case keys plus an ``id`` key
+    holding the document ID. This is the dedup module's read path.
+
+    The date window is filtered in Python rather than in the query:
+    combining ``processed == true`` with a ``scrapeDate`` range filter
+    requires a composite index, and the processed set within a few days is
+    small enough that over-fetching is cheaper than maintaining one.
+    """
+    query = (
+        get_db()
+        .collection(ARTICLES_COLLECTION)
+        .where(filter=FieldFilter("processed", "==", True))
+        .order_by("scrapeDate", direction="DESCENDING")
+    )
+    snapshots = await query.get()
+    cutoff = datetime.now(UTC) - timedelta(hours=hours)
+    articles: list[dict[str, Any]] = []
+    for snapshot in snapshots:
+        article = _keys_to_snake(snapshot.to_dict() or {})
+        scrape_date = _to_aware_datetime(article.get("scrape_date"))
+        if scrape_date is None or scrape_date < cutoff:
+            continue
+        article["id"] = snapshot.id
+        articles.append(article)
+    return articles
+
+
+async def update_article_dedup_fields(
+    article_id: str,
+    is_duplicate: bool,
+    canonical_article_id: str | None,
+    duplicate_group_id: str | None,
+) -> None:
+    """Update the deduplication fields on an article doc (see ADR 004).
+
+    Canonical articles get ``isDuplicate=False`` and a null
+    ``canonicalArticleId``; duplicates point at their canonical. All
+    members of a group share the ``duplicateGroupId``.
+    """
+    await (
+        get_db()
+        .collection(ARTICLES_COLLECTION)
+        .document(article_id)
+        .update(
+            {
+                "isDuplicate": is_duplicate,
+                "canonicalArticleId": canonical_article_id,
+                "duplicateGroupId": duplicate_group_id,
+            }
+        )
+    )
+    logger.info(
+        f"updated dedup fields doc_id={article_id} is_duplicate={is_duplicate} "
+        f"group={duplicate_group_id}"
+    )
+
+
+async def get_articles_by_duplicate_group(duplicate_group_id: str) -> list[dict[str, Any]]:
+    """Return all articles sharing this ``duplicateGroupId``.
+
+    Each dict has snake_case keys plus an ``id`` key. Used to check
+    whether a new article matches an existing duplicate group.
+    """
+    query = (
+        get_db()
+        .collection(ARTICLES_COLLECTION)
+        .where(filter=FieldFilter("duplicateGroupId", "==", duplicate_group_id))
+    )
+    snapshots = await query.get()
+    articles: list[dict[str, Any]] = []
+    for snapshot in snapshots:
+        article = _keys_to_snake(snapshot.to_dict() or {})
+        article["id"] = snapshot.id
+        articles.append(article)
+    return articles
 
 
 async def _find_one(collection: str, filters: dict[str, Any]) -> dict[str, Any] | None:

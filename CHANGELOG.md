@@ -7,6 +7,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Cross-source article deduplication using multi-signal similarity scoring
+- Firestore CRUD for dedup field updates and recent article queries
 - Entity promotion module: resolves and upserts brands, vehicles, features from processed articles
 - Brand alias dictionary with 40+ Chinese EV brands and suppliers
 - Firestore CRUD methods for brands, vehicles, and features collections
