@@ -1,0 +1,420 @@
+{
+  "aliases": {
+    "BYD": "BYD",
+    "BYD Auto": "BYD",
+    "BYD Company": "BYD",
+    "比亚迪": "BYD",
+    "比亚迪汽车": "BYD",
+    "NIO": "NIO",
+    "蔚来": "NIO",
+    "蔚来汽车": "NIO",
+    "XPENG": "XPENG",
+    "小鹏": "XPENG",
+    "小鹏汽车": "XPENG",
+    "Li Auto": "Li Auto",
+    "Li Xiang": "Li Auto",
+    "Lixiang": "Li Auto",
+    "理想": "Li Auto",
+    "理想汽车": "Li Auto",
+    "Huawei": "Huawei",
+    "华为": "Huawei",
+    "AITO": "AITO",
+    "问界": "AITO",
+    "Xiaomi": "Xiaomi",
+    "Xiaomi Auto": "Xiaomi",
+    "小米": "Xiaomi",
+    "小米汽车": "Xiaomi",
+    "Zeekr": "Zeekr",
+    "极氪": "Zeekr",
+    "Geely": "Geely",
+    "Geely Auto": "Geely",
+    "吉利": "Geely",
+    "吉利汽车": "Geely",
+    "Volvo": "Volvo",
+    "沃尔沃": "Volvo",
+    "Polestar": "Polestar",
+    "极星": "Polestar",
+    "Lynk & Co": "Lynk & Co",
+    "领克": "Lynk & Co",
+    "Great Wall": "Great Wall",
+    "Great Wall Motors": "Great Wall",
+    "GWM": "Great Wall",
+    "长城": "Great Wall",
+    "长城汽车": "Great Wall",
+    "Haval": "Haval",
+    "哈弗": "Haval",
+    "Tank": "Tank",
+    "坦克": "Tank",
+    "ORA": "ORA",
+    "欧拉": "ORA",
+    "Changan": "Changan",
+    "Changan Auto": "Changan",
+    "长安": "Changan",
+    "长安汽车": "Changan",
+    "Deepal": "Deepal",
+    "Changan Deepal": "Deepal",
+    "深蓝": "Deepal",
+    "Avatr": "Avatr",
+    "阿维塔": "Avatr",
+    "SAIC": "SAIC",
+    "SAIC Motor": "SAIC",
+    "上汽": "SAIC",
+    "上汽集团": "SAIC",
+    "IM Motors": "IM Motors",
+    "Zhiji": "IM Motors",
+    "智己": "IM Motors",
+    "MG": "MG",
+    "名爵": "MG",
+    "Roewe": "Roewe",
+    "荣威": "Roewe",
+    "GAC": "GAC",
+    "GAC Group": "GAC",
+    "广汽": "GAC",
+    "广汽集团": "GAC",
+    "GAC Aion": "GAC Aion",
+    "Aion": "GAC Aion",
+    "埃安": "GAC Aion",
+    "Dongfeng": "Dongfeng",
+    "Dongfeng Motor": "Dongfeng",
+    "东风": "Dongfeng",
+    "东风汽车": "Dongfeng",
+    "Voyah": "Voyah",
+    "岚图": "Voyah",
+    "Chery": "Chery",
+    "Chery Auto": "Chery",
+    "奇瑞": "Chery",
+    "奇瑞汽车": "Chery",
+    "iCar": "iCar",
+    "Exeed": "Exeed",
+    "星途": "Exeed",
+    "FAW": "FAW",
+    "FAW Group": "FAW",
+    "一汽": "FAW",
+    "中国一汽": "FAW",
+    "BAIC": "BAIC",
+    "BAIC Group": "BAIC",
+    "北汽": "BAIC",
+    "北京汽车": "BAIC",
+    "Leapmotor": "Leapmotor",
+    "Leap Motor": "Leapmotor",
+    "零跑": "Leapmotor",
+    "零跑汽车": "Leapmotor",
+    "Neta": "Neta",
+    "Hozon": "Neta",
+    "Hozon Auto": "Neta",
+    "合众汽车": "Neta",
+    "哪吒": "Neta",
+    "哪吒汽车": "Neta",
+    "JiYue": "JiYue",
+    "Jidu": "JiYue",
+    "极越": "JiYue",
+    "集度": "JiYue",
+    "Rising Auto": "Rising Auto",
+    "Rising": "Rising Auto",
+    "飞凡": "Rising Auto",
+    "飞凡汽车": "Rising Auto",
+    "Smart": "Smart",
+    "Smart Auto": "Smart",
+    "精灵": "Smart",
+    "CATL": "CATL",
+    "Contemporary Amperex": "CATL",
+    "Contemporary Amperex Technology": "CATL",
+    "宁德时代": "CATL",
+    "Huawei Qiankun": "Huawei Qiankun",
+    "Huawei ADS": "Huawei Qiankun",
+    "Huawei Inside": "Huawei Qiankun",
+    "乾崑": "Huawei Qiankun",
+    "华为乾崑": "Huawei Qiankun",
+    "Horizon Robotics": "Horizon Robotics",
+    "Horizon": "Horizon Robotics",
+    "地平线": "Horizon Robotics",
+    "Black Sesame": "Black Sesame",
+    "Black Sesame Technologies": "Black Sesame",
+    "Black Sesame Intelligent": "Black Sesame",
+    "黑芝麻智能": "Black Sesame",
+    "RoboSense": "RoboSense",
+    "Suteng Innovation": "RoboSense",
+    "速腾聚创": "RoboSense",
+    "Hesai": "Hesai",
+    "Hesai Technology": "Hesai",
+    "Hesai Tech": "Hesai",
+    "禾赛": "Hesai",
+    "Desay SV": "Desay SV",
+    "Desay": "Desay SV",
+    "德赛西威": "Desay SV",
+    "BYD Semiconductor": "BYD Semiconductor",
+    "比亚迪半导体": "BYD Semiconductor"
+  },
+  "brands": {
+    "BYD": {
+      "nameEn": "BYD",
+      "nameZh": "比亚迪",
+      "parentGroup": "BYD",
+      "evFocus": false
+    },
+    "NIO": {
+      "nameEn": "NIO",
+      "nameZh": "蔚来",
+      "parentGroup": "NIO",
+      "evFocus": true
+    },
+    "XPENG": {
+      "nameEn": "XPENG",
+      "nameZh": "小鹏",
+      "parentGroup": "XPENG",
+      "evFocus": true
+    },
+    "Li Auto": {
+      "nameEn": "Li Auto",
+      "nameZh": "理想汽车",
+      "parentGroup": "Li Auto",
+      "evFocus": true
+    },
+    "Huawei": {
+      "nameEn": "Huawei",
+      "nameZh": "华为",
+      "parentGroup": "Huawei",
+      "evFocus": false
+    },
+    "AITO": {
+      "nameEn": "AITO",
+      "nameZh": "问界",
+      "parentGroup": "Huawei",
+      "evFocus": true
+    },
+    "Xiaomi": {
+      "nameEn": "Xiaomi",
+      "nameZh": "小米",
+      "parentGroup": "Xiaomi",
+      "evFocus": false
+    },
+    "Zeekr": {
+      "nameEn": "Zeekr",
+      "nameZh": "极氪",
+      "parentGroup": "Geely",
+      "evFocus": true
+    },
+    "Geely": {
+      "nameEn": "Geely",
+      "nameZh": "吉利",
+      "parentGroup": "Geely",
+      "evFocus": false
+    },
+    "Volvo": {
+      "nameEn": "Volvo",
+      "nameZh": "沃尔沃",
+      "parentGroup": "Geely",
+      "evFocus": false
+    },
+    "Polestar": {
+      "nameEn": "Polestar",
+      "nameZh": "极星",
+      "parentGroup": "Geely",
+      "evFocus": true
+    },
+    "Lynk & Co": {
+      "nameEn": "Lynk & Co",
+      "nameZh": "领克",
+      "parentGroup": "Geely",
+      "evFocus": false
+    },
+    "Great Wall": {
+      "nameEn": "Great Wall",
+      "nameZh": "长城",
+      "parentGroup": "Great Wall",
+      "evFocus": false
+    },
+    "Haval": {
+      "nameEn": "Haval",
+      "nameZh": "哈弗",
+      "parentGroup": "Great Wall",
+      "evFocus": false
+    },
+    "Tank": {
+      "nameEn": "Tank",
+      "nameZh": "坦克",
+      "parentGroup": "Great Wall",
+      "evFocus": false
+    },
+    "ORA": {
+      "nameEn": "ORA",
+      "nameZh": "欧拉",
+      "parentGroup": "Great Wall",
+      "evFocus": true
+    },
+    "Changan": {
+      "nameEn": "Changan",
+      "nameZh": "长安",
+      "parentGroup": "Changan",
+      "evFocus": false
+    },
+    "Deepal": {
+      "nameEn": "Deepal",
+      "nameZh": "深蓝",
+      "parentGroup": "Changan",
+      "evFocus": true
+    },
+    "Avatr": {
+      "nameEn": "Avatr",
+      "nameZh": "阿维塔",
+      "parentGroup": "Changan",
+      "evFocus": true
+    },
+    "SAIC": {
+      "nameEn": "SAIC",
+      "nameZh": "上汽",
+      "parentGroup": "SAIC",
+      "evFocus": false
+    },
+    "IM Motors": {
+      "nameEn": "IM Motors",
+      "nameZh": "智己",
+      "parentGroup": "SAIC",
+      "evFocus": true
+    },
+    "MG": {
+      "nameEn": "MG",
+      "nameZh": "名爵",
+      "parentGroup": "SAIC",
+      "evFocus": false
+    },
+    "Roewe": {
+      "nameEn": "Roewe",
+      "nameZh": "荣威",
+      "parentGroup": "SAIC",
+      "evFocus": false
+    },
+    "GAC": {
+      "nameEn": "GAC",
+      "nameZh": "广汽",
+      "parentGroup": "GAC",
+      "evFocus": false
+    },
+    "GAC Aion": {
+      "nameEn": "GAC Aion",
+      "nameZh": "埃安",
+      "parentGroup": "GAC",
+      "evFocus": true
+    },
+    "Dongfeng": {
+      "nameEn": "Dongfeng",
+      "nameZh": "东风",
+      "parentGroup": "Dongfeng",
+      "evFocus": false
+    },
+    "Voyah": {
+      "nameEn": "Voyah",
+      "nameZh": "岚图",
+      "parentGroup": "Dongfeng",
+      "evFocus": true
+    },
+    "Chery": {
+      "nameEn": "Chery",
+      "nameZh": "奇瑞",
+      "parentGroup": "Chery",
+      "evFocus": false
+    },
+    "iCar": {
+      "nameEn": "iCar",
+      "nameZh": "iCAR",
+      "parentGroup": "Chery",
+      "evFocus": true
+    },
+    "Exeed": {
+      "nameEn": "Exeed",
+      "nameZh": "星途",
+      "parentGroup": "Chery",
+      "evFocus": false
+    },
+    "FAW": {
+      "nameEn": "FAW",
+      "nameZh": "一汽",
+      "parentGroup": "FAW",
+      "evFocus": false
+    },
+    "BAIC": {
+      "nameEn": "BAIC",
+      "nameZh": "北汽",
+      "parentGroup": "BAIC",
+      "evFocus": false
+    },
+    "Leapmotor": {
+      "nameEn": "Leapmotor",
+      "nameZh": "零跑",
+      "parentGroup": "Leapmotor",
+      "evFocus": true
+    },
+    "Neta": {
+      "nameEn": "Neta",
+      "nameZh": "哪吒",
+      "parentGroup": "Hozon",
+      "evFocus": true
+    },
+    "JiYue": {
+      "nameEn": "JiYue",
+      "nameZh": "极越",
+      "parentGroup": "Geely",
+      "evFocus": true
+    },
+    "Rising Auto": {
+      "nameEn": "Rising Auto",
+      "nameZh": "飞凡",
+      "parentGroup": "SAIC",
+      "evFocus": true
+    },
+    "Smart": {
+      "nameEn": "Smart",
+      "nameZh": "精灵",
+      "parentGroup": "Geely",
+      "evFocus": true
+    },
+    "CATL": {
+      "nameEn": "CATL",
+      "nameZh": "宁德时代",
+      "parentGroup": null,
+      "evFocus": false
+    },
+    "Huawei Qiankun": {
+      "nameEn": "Huawei Qiankun",
+      "nameZh": "华为乾崑",
+      "parentGroup": "Huawei",
+      "evFocus": false
+    },
+    "Horizon Robotics": {
+      "nameEn": "Horizon Robotics",
+      "nameZh": "地平线",
+      "parentGroup": null,
+      "evFocus": false
+    },
+    "Black Sesame": {
+      "nameEn": "Black Sesame",
+      "nameZh": "黑芝麻智能",
+      "parentGroup": null,
+      "evFocus": false
+    },
+    "RoboSense": {
+      "nameEn": "RoboSense",
+      "nameZh": "速腾聚创",
+      "parentGroup": null,
+      "evFocus": false
+    },
+    "Hesai": {
+      "nameEn": "Hesai",
+      "nameZh": "禾赛",
+      "parentGroup": null,
+      "evFocus": false
+    },
+    "Desay SV": {
+      "nameEn": "Desay SV",
+      "nameZh": "德赛西威",
+      "parentGroup": null,
+      "evFocus": false
+    },
+    "BYD Semiconductor": {
+      "nameEn": "BYD Semiconductor",
+      "nameZh": "比亚迪半导体",
+      "parentGroup": "BYD",
+      "evFocus": false
+    }
+  }
+}

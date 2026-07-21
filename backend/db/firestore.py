@@ -1,6 +1,7 @@
-"""Async Firestore helpers for the ``articles`` and ``scraper_health`` collections.
+"""Async Firestore helpers for the pipeline collections.
 
-These are the two collections the Phase 1 scraper pipeline writes to. The
+Covers ``articles`` and ``scraper_health`` (Phase 1 scraper pipeline) plus
+``brands``, ``vehicles``, and ``features`` (Phase 2 entity promotion). The
 Firestore client is initialized lazily on first use so tests can swap in a
 mock without touching real Firebase credentials. Python code uses
 snake_case keys; Firestore documents use camelCase (see
@@ -26,6 +27,9 @@ logger = logging.getLogger(__name__)
 
 ARTICLES_COLLECTION = "articles"
 SCRAPER_HEALTH_COLLECTION = "scraper_health"
+BRANDS_COLLECTION = "brands"
+VEHICLES_COLLECTION = "vehicles"
+FEATURES_COLLECTION = "features"
 
 _db: AsyncClient | None = None
 
@@ -159,6 +163,114 @@ async def set_article_processing_error(doc_id: str, error_message: str) -> None:
         .update({"processingError": error_message})
     )
     logger.warning(f"processing error doc_id={doc_id} error={error_message}")
+
+
+async def _find_one(collection: str, filters: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the first doc matching all equality ``filters``, or None.
+
+    ``filters`` maps camelCase field names to required values. The returned
+    dict has snake_case keys plus an ``id`` key holding the document ID,
+    matching the shape of ``get_unprocessed_articles`` results.
+    """
+    query: Any = get_db().collection(collection)  # google types are Any (ignore_missing_imports)
+    for field_name, value in filters.items():
+        query = query.where(filter=FieldFilter(field_name, "==", value))
+    snapshots = await query.limit(1).get()
+    if not snapshots:
+        return None
+    doc = _keys_to_snake(snapshots[0].to_dict() or {})
+    doc["id"] = snapshots[0].id
+    return doc
+
+
+async def _upsert(
+    collection: str,
+    match: dict[str, Any],
+    data: dict[str, Any],
+    create_only: dict[str, Any] | None = None,
+) -> str:
+    """Create or update a doc in ``collection`` matched by equality ``match``.
+
+    ``data`` keys are snake_case and converted to camelCase on write;
+    ``lastUpdated`` is set to the server timestamp on both paths.
+    ``create_only`` fields (already camelCase) are written only when a new
+    doc is created — existing docs never have them overwritten. Returns the
+    doc ID.
+    """
+    payload = _keys_to_camel(data)
+    payload["lastUpdated"] = SERVER_TIMESTAMP
+    existing = await _find_one(collection, match)
+    if existing is not None:
+        doc_id = str(existing["id"])
+        await get_db().collection(collection).document(doc_id).update(payload)
+        logger.info(f"updated {collection} doc doc_id={doc_id}")
+        return doc_id
+    if create_only:
+        payload.update(create_only)
+    _, doc_ref = await get_db().collection(collection).add(payload)
+    doc_id = str(doc_ref.id)
+    logger.info(f"created {collection} doc doc_id={doc_id}")
+    return doc_id
+
+
+async def get_brand_by_name_en(name_en: str) -> dict[str, Any] | None:
+    """Return the brand doc with this canonical ``nameEn``, or None."""
+    return await _find_one(BRANDS_COLLECTION, {"nameEn": name_en})
+
+
+async def upsert_brand(brand_data: dict[str, Any]) -> str:
+    """Create or update a brand doc keyed by ``name_en`` and return its doc ID.
+
+    ``brand_data`` holds snake_case fields (name_en, name_zh, parent_group,
+    ev_focus); ``lastUpdated`` is set to the server timestamp.
+    """
+    return await _upsert(BRANDS_COLLECTION, {"nameEn": brand_data["name_en"]}, brand_data)
+
+
+async def get_vehicle_by_model(brand_id: str, model_name_en: str) -> dict[str, Any] | None:
+    """Return the vehicle doc matching ``brandId`` + ``modelNameEn``, or None."""
+    return await _find_one(VEHICLES_COLLECTION, {"brandId": brand_id, "modelNameEn": model_name_en})
+
+
+async def upsert_vehicle(vehicle_data: dict[str, Any]) -> str:
+    """Create or update a vehicle doc keyed by brand + model and return its doc ID.
+
+    ``vehicle_data`` holds snake_case fields (brand_id, brand_name_en,
+    model_name_en, plus optional schema fields).
+    """
+    return await _upsert(
+        VEHICLES_COLLECTION,
+        {"brandId": vehicle_data["brand_id"], "modelNameEn": vehicle_data["model_name_en"]},
+        vehicle_data,
+    )
+
+
+async def get_feature(brand_id: str, feature_name: str, category: str) -> dict[str, Any] | None:
+    """Return the feature doc matching ``brandId`` + ``featureNameEn`` + ``category``."""
+    return await _find_one(
+        FEATURES_COLLECTION,
+        {"brandId": brand_id, "featureNameEn": feature_name, "category": category},
+    )
+
+
+async def upsert_feature(feature_data: dict[str, Any]) -> str:
+    """Create or update a feature doc and return its doc ID.
+
+    Matched on brand + feature name + category. New docs get
+    ``firstSeenDate`` set to the server timestamp; updates never touch it.
+    ``lastUpdated`` (beyond the original schema, intentionally) is set on
+    both paths.
+    """
+    return await _upsert(
+        FEATURES_COLLECTION,
+        {
+            "brandId": feature_data["brand_id"],
+            "featureNameEn": feature_data["feature_name_en"],
+            "category": feature_data["category"],
+        },
+        feature_data,
+        create_only={"firstSeenDate": SERVER_TIMESTAMP},
+    )
 
 
 async def save_health_metrics(metrics: dict[str, Any]) -> str:

@@ -1,8 +1,10 @@
-"""Prompt templates for the LLM extraction pipeline.
+"""Prompt templates for the LLM processing modules.
 
 ``EXTRACTION_PROMPT`` is copied verbatim from docs/llm-pipeline.md — do not
 edit it here without updating the spec. ``build_extraction_message`` combines
 the prompt with a single article's title and body for the Claude API call.
+``BRAND_RESOLUTION_PROMPT`` backs the entity promotion fallback (ADR 005):
+it asks Sonnet to resolve a brand name the alias dictionary does not know.
 """
 
 from __future__ import annotations
@@ -33,6 +35,25 @@ Chinese EV/auto industry, extract the following:
 Respond in JSON only. No markdown fences. No preamble."""
 
 
+BRAND_RESOLUTION_PROMPT: str = """You are an automotive intelligence analyst. Determine whether the
+following name refers to a known Chinese EV brand, automaker, or automotive
+supplier.
+
+If it does, respond with a JSON object:
+{"name_en": "<canonical English brand name>",
+ "name_zh": "<Chinese brand name or null>",
+ "parent_group": "<parent company name or null>"}
+
+If it does not, respond with exactly: null
+
+Respond in JSON only. No markdown fences. No preamble."""
+
+
 def build_extraction_message(title: str, body: str) -> str:
     """Combine the extraction prompt with one article's title and body."""
     return f"{EXTRACTION_PROMPT}\n\nTitle: {title}\n{body}"
+
+
+def build_brand_resolution_message(name: str) -> str:
+    """Combine the brand resolution prompt with the name to resolve."""
+    return f"{BRAND_RESOLUTION_PROMPT}\n\nName: {name}"
