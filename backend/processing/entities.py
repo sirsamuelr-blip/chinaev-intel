@@ -4,7 +4,14 @@ Implements the hybrid entity resolution strategy from ADR 005: brand names
 are resolved against a curated alias dictionary first, with a Claude Sonnet
 fallback for names the dictionary does not know. Resolved entities are
 upserted into the ``brands``, ``vehicles``, and ``features`` collections.
-This module is standalone — it is not wired into the pipeline runner yet.
+Wired into the pipeline runner as a Phase 2 step (see
+``scrapers/runner.py::_phase2_promote_entities``).
+
+The Sonnet fallback is driven through a per-run ``BrandResolver``: each
+distinct brand-name string is resolved at most once, the number of Sonnet
+calls is capped per run (``MAX_SONNET_BRAND_RESOLUTIONS``), and known
+non-automotive false positives (``NON_AUTOMOTIVE_BRANDS``) are filtered out
+before any resolution attempt. Together these keep runaway API cost in check.
 """
 
 from __future__ import annotations
@@ -29,8 +36,32 @@ ALIASES_PATH = Path(__file__).parent.parent / "config" / "brand_aliases.json"
 
 MAX_TOKENS = 1024
 
+# Maximum Sonnet brand-resolution fallback calls allowed in a single pipeline
+# run. Dictionary hits are free and uncounted; only the LLM fallback counts
+# against this, so one runaway run cannot rack up unbounded API cost.
+MAX_SONNET_BRAND_RESOLUTIONS = 20
+
 # Vehicle names like "Lynk & Co 08" carry up to three brand words before the model.
 _MAX_BRAND_PREFIX_WORDS = 3
+
+# Entities the LLM extraction occasionally returns as brands that are not
+# automakers at all — streaming platforms, phone makers, phone OSes, venues.
+# They are filtered before resolution so they never trigger a Sonnet fallback
+# call or a "skipping unresolvable brand" warning.
+NON_AUTOMOTIVE_BRANDS: frozenset[str] = frozenset(
+    {
+        "iQIYI",
+        "爱奇艺",
+        "Honor",
+        "荣耀",
+        "Flyme",
+        "元镜",
+        "Yuan Mirror",
+        "国家大剧院",
+        "National Centre for the Performing Arts",
+    }
+)
+_NON_AUTOMOTIVE_LOWERED: frozenset[str] = frozenset(name.lower() for name in NON_AUTOMOTIVE_BRANDS)
 
 # Alias/article/Firestore dicts hold heterogeneous values (str, bool, list,
 # map, ...), so dict values are typed as Any throughout this module.
@@ -61,35 +92,70 @@ def resolve_brand_name(name: str, aliases: dict[str, Any]) -> str | None:
     return lowered.get(name.strip().lower())
 
 
-def _parse_resolution(text: str) -> dict[str, Any] | None:
-    """Parse the brand resolution response from Claude.
+def is_non_automotive_brand(name: str) -> bool:
+    """Return True when ``name`` is a known non-automotive false positive.
 
-    Returns the resolved mapping dict, or None when Claude answered ``null``
-    (not a known brand) or returned something unparseable.
+    Matching is case-insensitive (a no-op for the Chinese entries). Callers
+    use this to drop such names before any resolution attempt, so they never
+    reach the alias dictionary or the Sonnet fallback.
+    """
+    return name.strip().lower() in _NON_AUTOMOTIVE_LOWERED
+
+
+def _salvage_json(text: str) -> object:
+    """Parse ``text`` as JSON, retrying on the first-``{`` to last-``}`` slice.
+
+    Sonnet occasionally appends commentary after the JSON object; the retry
+    salvages the object from that surrounding text. Mirrors
+    ``utils.parse_json_object``'s brace salvage but stays local so the caller
+    owns logging (WARNING with the brand name) and can treat a bare ``null``
+    as the expected "not a known brand" answer rather than an error. Raises
+    ``json.JSONDecodeError`` when neither parse succeeds.
     """
     try:
-        parsed = json.loads(text.strip())
+        return json.loads(text)
     except json.JSONDecodeError:
-        logger.error(f"brand resolution response is not valid JSON: {text[:200]!r}")
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end <= start:
+            raise
+        return json.loads(text[start : end + 1])
+
+
+def _parse_resolution(text: str, name: str) -> dict[str, Any] | None:
+    """Parse the brand resolution response from Claude for ``name``.
+
+    Returns the resolved mapping dict, or None when Claude answered ``null``
+    (not a known brand) or returned something unparseable. A parse failure is
+    logged at WARNING with the brand name and a truncated response so bad
+    responses are diagnosable without leaking the full payload into logs.
+    """
+    stripped = text.strip()
+    try:
+        parsed = _salvage_json(stripped)
+    except json.JSONDecodeError:
+        logger.warning(
+            f"brand resolution response not valid JSON name={name} response={stripped[:200]!r}"
+        )
         return None
-    if not isinstance(parsed, dict):
-        return None
-    if not parsed.get("name_en"):
-        logger.error("brand resolution response missing name_en")
+    if parsed is None:
+        return None  # Sonnet's expected "not a known brand" answer.
+    if not isinstance(parsed, dict) or not parsed.get("name_en"):
+        logger.warning(
+            f"brand resolution response missing name_en name={name} response={stripped[:200]!r}"
+        )
         return None
     return parsed
 
 
-async def resolve_brand_with_fallback(name: str, aliases: dict[str, Any]) -> str | None:
-    """Resolve a brand name via the alias dictionary, falling back to Sonnet.
+async def _resolve_brand_via_sonnet(name: str) -> str | None:
+    """Resolve one dictionary-unknown brand name via a single Sonnet call.
 
-    On a Sonnet resolution the mapping is logged for human review and
-    addition to ``brand_aliases.json`` — it is never written automatically.
-    Returns None when neither path resolves the name.
+    Returns the canonical English name, or None when Claude answers ``null``
+    (not a known brand), the call fails, or the response cannot be parsed. A
+    successful resolution is logged for human review and addition to
+    ``brand_aliases.json`` — it is never written back automatically.
     """
-    canonical = resolve_brand_name(name, aliases)
-    if canonical is not None:
-        return canonical
     text = await call_claude(
         [{"role": "user", "content": build_brand_resolution_message(name)}],
         max_tokens=MAX_TOKENS,
@@ -97,7 +163,7 @@ async def resolve_brand_with_fallback(name: str, aliases: dict[str, Any]) -> str
     if text is None:
         logger.warning(f"llm brand resolution failed name={name}")
         return None
-    resolved = _parse_resolution(text)
+    resolved = _parse_resolution(text, name)
     if resolved is None:
         logger.info(f"llm brand resolution: not a known brand name={name}")
         return None
@@ -109,18 +175,84 @@ async def resolve_brand_with_fallback(name: str, aliases: dict[str, Any]) -> str
     return str(resolved["name_en"])
 
 
-async def promote_brands(brand_names: list[str], aliases: dict[str, Any]) -> dict[str, str]:
+class BrandResolver:
+    """Per-run brand resolver: alias dictionary first, then capped Sonnet fallback.
+
+    Holds run-scoped state so a single pipeline run resolves each distinct
+    dictionary-unknown name at most once (memoized, successes and failures
+    alike) and makes at most ``MAX_SONNET_BRAND_RESOLUTIONS`` Sonnet calls in
+    total. Construct one per run and share it across every article in that run
+    to prevent the same unknown brand from triggering repeated LLM calls.
+    """
+
+    def __init__(self, aliases: dict[str, Any]) -> None:
+        self.aliases = aliases
+        # name (stripped, lowercased) -> resolved canonical name or None.
+        self._cache: dict[str, str | None] = {}
+        self._sonnet_calls = 0
+        self._cap_logged = False
+
+    async def resolve(self, name: str) -> str | None:
+        """Resolve ``name`` to a canonical brand, dictionary first then Sonnet.
+
+        The dictionary path is free and always tried. The Sonnet fallback is
+        memoized for the run and capped; once the cap is hit, remaining
+        unknown names resolve to None after a single log line.
+        """
+        canonical = resolve_brand_name(name, self.aliases)
+        if canonical is not None:
+            return canonical
+        key = name.strip().lower()
+        if key in self._cache:
+            return self._cache[key]
+        if self._sonnet_calls >= MAX_SONNET_BRAND_RESOLUTIONS:
+            if not self._cap_logged:
+                logger.info("brand resolution cap reached, skipping remaining unresolved brands")
+                self._cap_logged = True
+            return None
+        self._sonnet_calls += 1
+        resolved = await _resolve_brand_via_sonnet(name)
+        self._cache[key] = resolved
+        return resolved
+
+
+async def resolve_brand_with_fallback(
+    name: str, aliases: dict[str, Any], resolver: BrandResolver | None = None
+) -> str | None:
+    """Resolve a brand name via the alias dictionary, falling back to Sonnet.
+
+    Delegates to a ``BrandResolver``: pass a shared one to reuse a run's
+    resolution cache and Sonnet-call budget, or omit it for a one-off
+    resolution with a fresh per-call resolver. Returns None when neither the
+    dictionary nor the fallback resolves the name.
+    """
+    if resolver is None:
+        resolver = BrandResolver(aliases)
+    return await resolver.resolve(name)
+
+
+async def promote_brands(
+    brand_names: list[str],
+    aliases: dict[str, Any],
+    resolver: BrandResolver | None = None,
+) -> dict[str, str]:
     """Resolve each brand name and upsert it into the brands collection.
 
-    Returns a mapping of original name -> brand doc ID. Unresolvable names
-    are skipped; a single failure never aborts the remaining names. Brands
-    resolved by the LLM fallback have no dictionary metadata and are
-    upserted with ``name_en`` only.
+    Returns a mapping of original name -> brand doc ID. Known non-automotive
+    false positives are dropped silently before any resolution attempt.
+    Unresolvable names are skipped with a warning; a single failure never
+    aborts the remaining names. Brands resolved by the LLM fallback have no
+    dictionary metadata and are upserted with ``name_en`` only. Pass a shared
+    ``resolver`` to reuse the run's resolution cache and Sonnet-call budget.
     """
+    if resolver is None:
+        resolver = BrandResolver(aliases)
     brand_map: dict[str, str] = {}
     for name in brand_names:
+        if is_non_automotive_brand(name):
+            continue  # known false positive: skip silently, no Sonnet call
         try:
-            canonical = await resolve_brand_with_fallback(name, aliases)
+            canonical = await resolver.resolve(name)
             if canonical is None:
                 logger.warning(f"skipping unresolvable brand name={name}")
                 continue
@@ -249,7 +381,9 @@ async def promote_features(
     return feature_ids
 
 
-async def promote_entities_from_article(article_doc: dict[str, Any]) -> dict[str, int]:
+async def promote_entities_from_article(
+    article_doc: dict[str, Any], resolver: BrandResolver | None = None
+) -> dict[str, int]:
     """Promote all extracted entities from one processed article doc.
 
     ``article_doc`` uses the Firestore doc shape: camelCase top-level keys
@@ -257,14 +391,20 @@ async def promote_entities_from_article(article_doc: dict[str, Any]) -> dict[str
     snake_case keys inside each extracted feature, as written by the LLM
     pipeline. Missing or empty fields skip that promotion step. Returns a
     summary of promoted entity counts.
+
+    Pass a shared ``resolver`` to share the brand-resolution cache and
+    Sonnet-call budget across every article in a run; when omitted, a fresh
+    per-article resolver is used.
     """
     article_id = article_doc.get("id")
-    aliases = load_aliases()
+    if resolver is None:
+        resolver = BrandResolver(load_aliases())
+    aliases = resolver.aliases
 
     brand_names = article_doc.get("brandsMentioned") or []
     if not brand_names:
         logger.warning(f"article has no brandsMentioned, skipping brands article_id={article_id}")
-    brand_map = await promote_brands(brand_names, aliases)
+    brand_map = await promote_brands(brand_names, aliases, resolver)
 
     vehicle_names = article_doc.get("vehiclesMentioned") or []
     if not vehicle_names:

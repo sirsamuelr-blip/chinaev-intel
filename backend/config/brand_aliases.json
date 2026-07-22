@@ -143,7 +143,51 @@
     "Desay": "Desay SV",
     "德赛西威": "Desay SV",
     "BYD Semiconductor": "BYD Semiconductor",
-    "比亚迪半导体": "BYD Semiconductor"
+    "比亚迪半导体": "BYD Semiconductor",
+    "Yangwang": "Yangwang",
+    "仰望": "Yangwang",
+    "Denza": "Denza",
+    "腾势": "Denza",
+    "Fang Cheng Bao": "Fang Cheng Bao",
+    "Fangchengbao": "Fang Cheng Bao",
+    "Leopard": "Fang Cheng Bao",
+    "方程豹": "Fang Cheng Bao",
+    "Galaxy": "Galaxy",
+    "Geely Galaxy": "Galaxy",
+    "银河": "Galaxy",
+    "Luxeed": "Luxeed",
+    "Zhijie": "Luxeed",
+    "智界": "Luxeed",
+    "Onvo": "Onvo",
+    "Ledao": "Onvo",
+    "乐道": "Onvo",
+    "Firefly": "Firefly",
+    "萤火虫": "Firefly",
+    "Arcfox": "Arcfox",
+    "极狐": "Arcfox",
+    "Taitanium": "Taitanium",
+    "泰钽": "Taitanium",
+    "Enclave": "Enclave",
+    "至境": "Enclave",
+    "Hyundai": "Hyundai",
+    "现代": "Hyundai",
+    "Kona": "Hyundai",
+    "Creta": "Hyundai",
+    "Seltos": "Hyundai",
+    "Tucson": "Hyundai",
+    "Santa Fe": "Hyundai",
+    "IONIQ": "Hyundai",
+    "Genesis": "Genesis",
+    "捷尼赛思": "Genesis",
+    "GV90": "Genesis",
+    "GV60": "Genesis",
+    "Magma GT": "Genesis",
+    "Mint": "Genesis",
+    "Mercedes-Benz": "Mercedes-Benz",
+    "Mercedes": "Mercedes-Benz",
+    "奔驰": "Mercedes-Benz",
+    "梅赛德斯-奔驰": "Mercedes-Benz",
+    "S500": "Mercedes-Benz"
   },
   "brands": {
     "BYD": {
@@ -414,6 +458,84 @@
       "nameEn": "BYD Semiconductor",
       "nameZh": "比亚迪半导体",
       "parentGroup": "BYD",
+      "evFocus": false
+    },
+    "Yangwang": {
+      "nameEn": "Yangwang",
+      "nameZh": "仰望",
+      "parentGroup": "BYD",
+      "evFocus": true
+    },
+    "Denza": {
+      "nameEn": "Denza",
+      "nameZh": "腾势",
+      "parentGroup": "BYD",
+      "evFocus": true
+    },
+    "Fang Cheng Bao": {
+      "nameEn": "Fang Cheng Bao",
+      "nameZh": "方程豹",
+      "parentGroup": "BYD",
+      "evFocus": true
+    },
+    "Galaxy": {
+      "nameEn": "Galaxy",
+      "nameZh": "银河",
+      "parentGroup": "Geely",
+      "evFocus": true
+    },
+    "Luxeed": {
+      "nameEn": "Luxeed",
+      "nameZh": "智界",
+      "parentGroup": "Chery",
+      "evFocus": true
+    },
+    "Onvo": {
+      "nameEn": "Onvo",
+      "nameZh": "乐道",
+      "parentGroup": "NIO",
+      "evFocus": true
+    },
+    "Firefly": {
+      "nameEn": "Firefly",
+      "nameZh": "萤火虫",
+      "parentGroup": "NIO",
+      "evFocus": true
+    },
+    "Arcfox": {
+      "nameEn": "Arcfox",
+      "nameZh": "极狐",
+      "parentGroup": "BAIC",
+      "evFocus": true
+    },
+    "Taitanium": {
+      "nameEn": "Taitanium",
+      "nameZh": "泰钽",
+      "parentGroup": "BAIC",
+      "evFocus": true
+    },
+    "Enclave": {
+      "nameEn": "Enclave",
+      "nameZh": "至境",
+      "parentGroup": "Buick",
+      "evFocus": true
+    },
+    "Hyundai": {
+      "nameEn": "Hyundai",
+      "nameZh": "现代",
+      "parentGroup": "Hyundai",
+      "evFocus": false
+    },
+    "Genesis": {
+      "nameEn": "Genesis",
+      "nameZh": "捷尼赛思",
+      "parentGroup": "Hyundai",
+      "evFocus": false
+    },
+    "Mercedes-Benz": {
+      "nameEn": "Mercedes-Benz",
+      "nameZh": "梅赛德斯-奔驰",
+      "parentGroup": "Mercedes-Benz",
       "evFocus": false
     }
   }

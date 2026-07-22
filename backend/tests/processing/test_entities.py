@@ -10,6 +10,7 @@ an in-test dictionary; ``load_aliases`` tests read the real JSON file.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -83,6 +84,13 @@ def db_mocks(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
         monkeypatch.setattr(entities, name, mock)
     monkeypatch.setattr(entities, "_aliases_cache", SAMPLE_ALIASES)
     return mocks
+
+
+@pytest.fixture
+def real_aliases(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Load the real brand_aliases.json, bypassing the module cache."""
+    monkeypatch.setattr(entities, "_aliases_cache", None)
+    return entities.load_aliases()
 
 
 class TestLoadAliases:
@@ -386,3 +394,208 @@ class TestPromoteEntitiesFromArticle:
         assert summary["brands_promoted"] == 1
         assert db_mocks["upsert_brand"].await_count == 2
         assert summary["features_promoted"] == 1
+
+
+class TestNewBrandAliases:
+    """The real alias dictionary resolves the newly added sub-brands."""
+
+    @pytest.mark.parametrize(
+        ("alias", "canonical", "parent_group"),
+        [
+            ("仰望", "Yangwang", "BYD"),
+            ("Yangwang", "Yangwang", "BYD"),
+            ("腾势", "Denza", "BYD"),
+            ("方程豹", "Fang Cheng Bao", "BYD"),
+            ("Leopard", "Fang Cheng Bao", "BYD"),
+            ("银河", "Galaxy", "Geely"),
+            ("智界", "Luxeed", "Chery"),
+            ("Zhijie", "Luxeed", "Chery"),
+            ("乐道", "Onvo", "NIO"),
+            ("Ledao", "Onvo", "NIO"),
+            ("萤火虫", "Firefly", "NIO"),
+            ("极狐", "Arcfox", "BAIC"),
+            ("泰钽", "Taitanium", "BAIC"),
+            ("至境", "Enclave", "Buick"),
+            ("Kona", "Hyundai", "Hyundai"),
+            ("IONIQ", "Hyundai", "Hyundai"),
+            ("GV90", "Genesis", "Hyundai"),
+            ("S500", "Mercedes-Benz", "Mercedes-Benz"),
+        ],
+    )
+    def test_new_alias_resolves_to_canonical_and_parent(
+        self,
+        real_aliases: dict[str, Any],
+        alias: str,
+        canonical: str,
+        parent_group: str,
+    ) -> None:
+        """Each new alias resolves to its canonical brand with the right parent."""
+        assert entities.resolve_brand_name(alias, real_aliases) == canonical
+        assert real_aliases["brands"][canonical]["parentGroup"] == parent_group
+
+    def test_sub_brand_vehicle_splits_to_parent_sub_brand(
+        self, real_aliases: dict[str, Any]
+    ) -> None:
+        """A sub-brand vehicle name splits into the sub-brand and model."""
+        assert entities._split_vehicle_name("Yangwang U8", real_aliases) == ("Yangwang", "U8")
+        assert entities._split_vehicle_name("Denza Z9GT", real_aliases) == ("Denza", "Z9GT")
+
+
+class TestNonAutomotiveFiltering:
+    """Known non-automotive false positives are filtered before resolution."""
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "iQIYI",
+            "爱奇艺",
+            "Honor",
+            "荣耀",
+            "Flyme",
+            "元镜",
+            "Yuan Mirror",
+            "国家大剧院",
+            "National Centre for the Performing Arts",
+        ],
+    )
+    def test_is_non_automotive_brand_true(self, name: str) -> None:
+        """Every listed false positive is recognized."""
+        assert entities.is_non_automotive_brand(name) is True
+
+    def test_is_non_automotive_brand_case_insensitive(self) -> None:
+        """Matching ignores case and surrounding whitespace."""
+        assert entities.is_non_automotive_brand("  iqiyi ") is True
+
+    def test_is_non_automotive_brand_false_for_real_brand(self) -> None:
+        """A real automaker is not filtered."""
+        assert entities.is_non_automotive_brand("BYD") is False
+
+    async def test_promote_brands_skips_non_automotive_silently(
+        self, db_mocks: dict[str, AsyncMock]
+    ) -> None:
+        """False positives are dropped with no upsert and no Sonnet call."""
+        result = await entities.promote_brands(["iQIYI", "国家大剧院"], SAMPLE_ALIASES)
+
+        assert result == {}
+        db_mocks["call_claude"].assert_not_awaited()
+        db_mocks["upsert_brand"].assert_not_awaited()
+
+    async def test_promote_brands_filters_non_automotive_but_keeps_real(
+        self, db_mocks: dict[str, AsyncMock]
+    ) -> None:
+        """A real brand alongside a false positive still promotes."""
+        result = await entities.promote_brands(["爱奇艺", "BYD"], SAMPLE_ALIASES)
+
+        assert result == {"BYD": "brand-1"}
+        db_mocks["call_claude"].assert_not_awaited()
+
+
+class TestBrandResolver:
+    """BrandResolver memoizes and caps the Sonnet fallback within a run."""
+
+    async def test_dictionary_hit_never_calls_sonnet(self, db_mocks: dict[str, AsyncMock]) -> None:
+        """A name in the alias dictionary resolves without the LLM."""
+        resolver = entities.BrandResolver(SAMPLE_ALIASES)
+
+        assert await resolver.resolve("比亚迪") == "BYD"
+        db_mocks["call_claude"].assert_not_awaited()
+
+    async def test_caches_successful_resolution_within_run(
+        self, db_mocks: dict[str, AsyncMock]
+    ) -> None:
+        """The same unknown name resolves once; the second lookup is cached."""
+        db_mocks["call_claude"].return_value = json.dumps(
+            {"name_en": "Onvo", "name_zh": "乐道", "parent_group": "NIO"}
+        )
+        resolver = entities.BrandResolver(SAMPLE_ALIASES)
+
+        first = await resolver.resolve("乐道")
+        second = await resolver.resolve("乐道")
+
+        assert first == second == "Onvo"
+        db_mocks["call_claude"].assert_awaited_once()
+
+    async def test_caches_failed_resolution_within_run(
+        self, db_mocks: dict[str, AsyncMock]
+    ) -> None:
+        """A name that fails resolution is not retried within the run."""
+        db_mocks["call_claude"].return_value = "null"
+        resolver = entities.BrandResolver(SAMPLE_ALIASES)
+
+        assert await resolver.resolve("Acme Corp") is None
+        assert await resolver.resolve("Acme Corp") is None
+        db_mocks["call_claude"].assert_awaited_once()
+
+    async def test_cache_shared_across_promote_brands_calls(
+        self, db_mocks: dict[str, AsyncMock]
+    ) -> None:
+        """One resolver across two article promotions dedups the Sonnet call."""
+        db_mocks["call_claude"].return_value = json.dumps(
+            {"name_en": "Onvo", "name_zh": "乐道", "parent_group": "NIO"}
+        )
+        resolver = entities.BrandResolver(SAMPLE_ALIASES)
+
+        await entities.promote_brands(["乐道"], SAMPLE_ALIASES, resolver)
+        await entities.promote_brands(["乐道"], SAMPLE_ALIASES, resolver)
+
+        db_mocks["call_claude"].assert_awaited_once()
+
+    async def test_caps_sonnet_calls_per_run(
+        self, db_mocks: dict[str, AsyncMock], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """No more than MAX_SONNET_BRAND_RESOLUTIONS Sonnet calls happen per run."""
+        db_mocks["call_claude"].return_value = json.dumps(
+            {"name_en": "X", "name_zh": None, "parent_group": None}
+        )
+        resolver = entities.BrandResolver(SAMPLE_ALIASES)
+        cap = entities.MAX_SONNET_BRAND_RESOLUTIONS
+
+        with caplog.at_level(logging.INFO, logger="processing.entities"):
+            results = [await resolver.resolve(f"Unknown Brand {i}") for i in range(cap + 5)]
+
+        assert db_mocks["call_claude"].await_count == cap
+        assert results[:cap] == ["X"] * cap
+        assert results[cap:] == [None] * 5
+        cap_logs = [r for r in caplog.records if "cap reached" in r.getMessage()]
+        assert len(cap_logs) == 1
+
+    async def test_salvages_json_with_trailing_commentary(
+        self, db_mocks: dict[str, AsyncMock]
+    ) -> None:
+        """A valid object followed by prose is salvaged rather than rejected."""
+        db_mocks["call_claude"].return_value = (
+            '{"name_en": "Onvo", "name_zh": "乐道", "parent_group": "NIO"}\n\n'
+            "Note: Onvo is NIO's mass-market sub-brand."
+        )
+        resolver = entities.BrandResolver(SAMPLE_ALIASES)
+
+        assert await resolver.resolve("乐道") == "Onvo"
+
+    async def test_warns_on_unparseable_response(
+        self, db_mocks: dict[str, AsyncMock], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """An unparseable response returns None and warns with the brand name."""
+        db_mocks["call_claude"].return_value = "Sorry, I cannot determine that."
+        resolver = entities.BrandResolver(SAMPLE_ALIASES)
+
+        with caplog.at_level(logging.WARNING, logger="processing.entities"):
+            assert await resolver.resolve("乐道") is None
+
+        warnings = [
+            record
+            for record in caplog.records
+            if record.levelno == logging.WARNING and "乐道" in record.getMessage()
+        ]
+        assert warnings
+
+    async def test_warns_on_object_missing_name_en(
+        self, db_mocks: dict[str, AsyncMock], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A parseable object without name_en returns None and warns."""
+        db_mocks["call_claude"].return_value = json.dumps({"name_zh": "乐道"})
+        resolver = entities.BrandResolver(SAMPLE_ALIASES)
+
+        with caplog.at_level(logging.WARNING, logger="processing.entities"):
+            assert await resolver.resolve("乐道") is None
+
+        assert any("missing name_en" in record.getMessage() for record in caplog.records)
