@@ -14,6 +14,8 @@ Prompts: `backend/processing/prompts.py`
 
 Do not use Opus for article processing. Do not use Sonnet for digest generation.
 
+> **Prompt caching:** Prompt caching is enabled on the extraction prompt. The system prompt is cached across sequential article processing calls, reducing input token cost by ~90% on the fixed prompt portion. Note: caching only engages once the cached prefix meets the model's minimum cacheable length (2048 tokens on Sonnet 4.6); below that the `cache_control` marker is a silent no-op (no error, no extra cost). Verify via `usage.cache_read_input_tokens` in API responses.
+
 ## Extraction Prompt
 
 This is the template in `backend/processing/prompts.py`:
@@ -93,7 +95,7 @@ Each item in `features_extracted`:
 ## Pipeline Flow
 
 1. Query Firestore: articles where `processed == false`, ordered by `scrapeDate` asc.
-2. For each article, combine `EXTRACTION_PROMPT` with the article title and body.
+2. For each article, send `EXTRACTION_PROMPT` as the system prompt (with a `cache_control` breakpoint) and the article title and body as the user message.
 3. Call Claude API (Sonnet). Request JSON response.
 4. Parse JSON. Validate against expected schema.
 5. Update article doc: set `titleEn`, `relevanceScore`, `contentType`, `brandsMentioned`, `vehiclesMentioned`, `featuresExtracted`, `processed = true`. (`bodyEn` is not populated — see note above.)

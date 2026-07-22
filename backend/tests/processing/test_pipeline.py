@@ -96,13 +96,13 @@ class TestPrompts:
         """The prompt instructs Claude to respond in JSON."""
         assert "json" in EXTRACTION_PROMPT.lower()
 
-    def test_build_extraction_message_includes_prompt(self) -> None:
-        """The combined message contains the full extraction prompt."""
+    def test_build_extraction_message_excludes_prompt(self) -> None:
+        """The user message holds only the article; the prompt is sent as system."""
         message = build_extraction_message("A title", "A body")
-        assert EXTRACTION_PROMPT in message
+        assert EXTRACTION_PROMPT not in message
 
     def test_build_extraction_message_includes_article(self) -> None:
-        """The combined message contains the article title and body."""
+        """The user message contains the article title and body."""
         message = build_extraction_message("A title", "A body")
         assert "A title" in message
         assert "A body" in message
@@ -124,6 +124,13 @@ class TestProcessArticle:
         assert call_kwargs["model"] == settings.SONNET_MODEL
         assert call_kwargs["max_tokens"] == 4096
         assert SAMPLE_ARTICLE["title"] in call_kwargs["messages"][0]["content"]
+        assert call_kwargs["system"] == [
+            {
+                "type": "text",
+                "text": EXTRACTION_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
 
     async def test_process_article_validates_required_keys(
         self, monkeypatch: pytest.MonkeyPatch

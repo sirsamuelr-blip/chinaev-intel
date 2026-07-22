@@ -15,7 +15,8 @@ import logging
 from typing import Any
 
 import anthropic
-from anthropic.types import MessageParam
+from anthropic import Omit, omit
+from anthropic.types import MessageParam, TextBlockParam
 
 from config import settings
 
@@ -28,22 +29,35 @@ async def call_claude(
     messages: list[MessageParam],
     model: str | None = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
+    system: str | None = None,
 ) -> str | None:
     """Call the Claude API with retries and return the response text.
 
-    ``model`` defaults to ``settings.SONNET_MODEL`` when None. Retries
-    with exponential backoff on any anthropic exception, up to
-    ``settings.MAX_RETRIES`` retries after the initial attempt. Returns
-    None once all attempts are exhausted or the response has no text
-    content.
+    ``model`` defaults to ``settings.SONNET_MODEL`` when None. ``system``,
+    when given, is sent as a system prompt with a ``cache_control``
+    breakpoint so identical prompts are served from the prompt cache
+    across sequential calls (5-minute TTL). Retries with exponential
+    backoff on any anthropic exception, up to ``settings.MAX_RETRIES``
+    retries after the initial attempt. Returns None once all attempts are
+    exhausted or the response has no text content.
     """
     resolved_model = model if model is not None else settings.SONNET_MODEL
+    system_blocks: list[TextBlockParam] | Omit = omit
+    if system is not None:
+        system_blocks = [
+            {
+                "type": "text",
+                "text": system,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
     client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
     for attempt in range(settings.MAX_RETRIES + 1):
         try:
             response = await client.messages.create(
                 model=resolved_model,
                 max_tokens=max_tokens,
+                system=system_blocks,
                 messages=messages,
             )
         except anthropic.AnthropicError as exc:

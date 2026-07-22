@@ -1,8 +1,9 @@
 """Prompt templates for the LLM processing modules.
 
 ``EXTRACTION_PROMPT`` is copied verbatim from docs/llm-pipeline.md — do not
-edit it here without updating the spec. ``build_extraction_message`` combines
-the prompt with a single article's title and body for the Claude API call.
+edit it here without updating the spec. It is sent as a cached system prompt
+(see ``utils.call_claude``); ``build_extraction_message`` formats a single
+article's title and body as the accompanying user message.
 ``BRAND_RESOLUTION_PROMPT`` backs the entity promotion fallback (ADR 005):
 it asks Sonnet to resolve a brand name the alias dictionary does not know.
 ``SIGNAL_NARRATIVE_PROMPT`` backs Stage 2 of signal detection (ADR 003): it
@@ -89,8 +90,13 @@ Respond in JSON only. No markdown fences. No preamble."""
 
 
 def build_extraction_message(title: str, body: str) -> str:
-    """Combine the extraction prompt with one article's title and body."""
-    return f"{EXTRACTION_PROMPT}\n\nTitle: {title}\n{body}"
+    """Format one article's title and body as the extraction user message.
+
+    The extraction prompt itself is not included here — the pipeline sends
+    ``EXTRACTION_PROMPT`` as a cached system prompt so its tokens are
+    shared across sequential article calls.
+    """
+    return f"Title: {title}\n{body}"
 
 
 def build_brand_resolution_message(name: str) -> str:

@@ -17,7 +17,7 @@ from db.firestore import (
     set_article_processing_error,
     update_article_after_processing,
 )
-from processing.prompts import build_extraction_message
+from processing.prompts import EXTRACTION_PROMPT, build_extraction_message
 from processing.utils import call_claude, parse_json_object
 
 logger = logging.getLogger(__name__)
@@ -87,7 +87,11 @@ async def process_article(article: dict[str, Any]) -> dict[str, Any] | None:
     except KeyError as exc:
         logger.error(f"article missing required field {exc} id={article.get('id')}")
         return None
-    text = await call_claude([{"role": "user", "content": message}], max_tokens=MAX_TOKENS)
+    text = await call_claude(
+        [{"role": "user", "content": message}],
+        max_tokens=MAX_TOKENS,
+        system=EXTRACTION_PROMPT,
+    )
     if text is None:
         return None
     return _parse_extraction(text)

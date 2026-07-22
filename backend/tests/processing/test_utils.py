@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import anthropic
 import pytest
+from anthropic import omit
 from anthropic.types import MessageParam
 
 from config import settings
@@ -125,6 +126,34 @@ class TestCallClaude:
         call_kwargs = client.messages.create.await_args.kwargs
         assert call_kwargs["model"] == settings.OPUS_MODEL
         assert call_kwargs["max_tokens"] == 1024
+
+    async def test_call_claude_omits_system_by_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without a system prompt the system parameter stays omitted."""
+        client = _make_client("ok")
+        _install_client(monkeypatch, client)
+
+        await call_claude(MESSAGES)
+
+        assert client.messages.create.await_args.kwargs["system"] is omit
+
+    async def test_call_claude_sends_cached_system_prompt(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A system prompt is sent as one text block with a cache breakpoint."""
+        client = _make_client("ok")
+        _install_client(monkeypatch, client)
+
+        await call_claude(MESSAGES, system="You are an analyst.")
+
+        assert client.messages.create.await_args.kwargs["system"] == [
+            {
+                "type": "text",
+                "text": "You are an analyst.",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
 
     async def test_call_claude_returns_none_on_empty_content(
         self, monkeypatch: pytest.MonkeyPatch
