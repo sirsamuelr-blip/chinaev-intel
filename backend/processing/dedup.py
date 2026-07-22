@@ -67,20 +67,50 @@ def _parse_date(value: datetime | str | None) -> datetime | None:
     """Coerce an ISO 8601 string or datetime to a timezone-aware datetime.
 
     Naive datetimes are assumed UTC (scrapers normalize to UTC before
-    writing). Returns None for missing or unparseable values — callers
-    treat those as "no date" rather than raising.
+    writing). Returns None for missing, empty, or unparseable values —
+    callers treat those as "no date" rather than raising. Parsing is
+    silent: empty publish dates are an expected condition for scraped
+    articles, so the empty-vs-malformed distinction and any logging live
+    in ``_resolve_article_date``, which alone has the article context.
     """
     if value is None:
         return None
     if isinstance(value, str):
+        if not value.strip():
+            return None
         try:
             value = datetime.fromisoformat(value)
         except ValueError:
-            logger.warning(f"unparseable date value: {value!r}")
             return None
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value
+
+
+def _resolve_article_date(
+    article: dict[str, Any], field: str, fallback_field: str | None = "scrapeDate"
+) -> datetime | None:
+    """Parse a date field from an article doc, falling back when unusable.
+
+    Empty, missing, or malformed dates all fall back to ``fallback_field``
+    (``scrapeDate`` by default; pass None to disable, e.g. when ``field``
+    already is ``scrapeDate``). Empty and missing values fall back
+    silently — an empty publish date is normal for scraped articles. A
+    non-empty but unparseable value is logged once at DEBUG with the
+    article ID and the offending value, then falls back. Returns the
+    resolved timezone-aware datetime, or None when nothing usable remains.
+    """
+    raw = article.get(field)
+    parsed = _parse_date(raw)
+    if parsed is not None:
+        return parsed
+    if isinstance(raw, str) and raw.strip():
+        logger.debug(
+            f"malformed {field}, falling back article_id={article.get('id')} value={raw!r}"
+        )
+    if fallback_field is None or fallback_field == field:
+        return None
+    return _parse_date(article.get(fallback_field))
 
 
 def date_within_window(
@@ -120,9 +150,13 @@ def compute_similarity(article_a: dict[str, Any], article_b: dict[str, Any]) -> 
     Articles outside the publish-date window score 0.0 immediately with no
     other dimension checked; inside it, the date-proximity dimension
     contributes its full weight (the binary dimension per ADR 004). A
-    missing field scores 0.0 on its dimension rather than raising.
+    missing or malformed publishDate falls back to scrapeDate so articles
+    without a source publish date still get compared. A missing field
+    scores 0.0 on its dimension rather than raising.
     """
-    if not date_within_window(article_a.get("publishDate"), article_b.get("publishDate")):
+    date_a = _resolve_article_date(article_a, "publishDate")
+    date_b = _resolve_article_date(article_b, "publishDate")
+    if not date_within_window(date_a, date_b):
         return 0.0
     title_score = title_similarity(article_a.get("titleEn"), article_b.get("titleEn"))
     brand_score = jaccard_similarity(
@@ -240,7 +274,9 @@ def _select_canonical(members: list[dict[str, Any]]) -> dict[str, Any]:
             return member
 
     def sort_key(member: dict[str, Any]) -> tuple[datetime, float]:
-        scrape_date = _parse_date(member.get("scrapeDate")) or datetime.max.replace(tzinfo=UTC)
+        scrape_date = _resolve_article_date(
+            member, "scrapeDate", fallback_field=None
+        ) or datetime.max.replace(tzinfo=UTC)
         relevance = member.get("relevanceScore") or 0
         return (scrape_date, -relevance)
 

@@ -6,6 +6,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Fixed date parsing to handle empty values without log spam
+
 ### Changed
 - Switched extraction pipeline to Anthropic Batch API for 50% cost reduction
 - Removed full English translation from extraction pipeline to reduce per-article API cost ~70%
