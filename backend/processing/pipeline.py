@@ -1,28 +1,55 @@
-"""LLM extraction pipeline: translate and extract structured data from articles.
+"""LLM extraction pipeline: extract structured data from articles via the Batch API.
 
-Reads unprocessed articles from Firestore, sends each to Claude Sonnet for
-translation and structured extraction, and writes results back. Articles are
-processed sequentially — one at a time — to respect API rate limits and keep
-debugging simple. A single article failure never crashes the run: every
-failure path logs and records ``processingError`` on the article doc.
+Reads unprocessed articles from Firestore, pre-filters them with a cheap
+synchronous Haiku triage call (ADR 007) — articles scoring below
+``RELEVANCE_THRESHOLD`` are marked processed with triage-only fields and
+skip full extraction — then submits the rest to the Anthropic Message
+Batches API in chunks of up to 100 requests — 50% cheaper than synchronous
+calls, and the added latency is irrelevant on a cron cadence (ADR 006).
+Each batch is polled until it ends, then results are mapped back to
+articles by Firestore doc ID. If batch submission fails, the pipeline
+falls back to synchronous per-article calls. A single article failure never
+crashes the run: every failure path logs and records ``processingError`` on
+the article doc, and any triage failure fails open into full extraction.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, NamedTuple
 
+import anthropic
+from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
+from anthropic.types.messages.batch_create_params import Request
+
+from config import settings
 from db.firestore import (
     get_unprocessed_articles,
     set_article_processing_error,
     update_article_after_processing,
 )
-from processing.prompts import build_extraction_message
-from processing.utils import call_claude, parse_json_object
+from processing.prompts import EXTRACTION_PROMPT, TRIAGE_PROMPT, build_extraction_message
+from processing.utils import (
+    call_claude,
+    get_batch_results,
+    parse_json_object,
+    poll_batch,
+    submit_batch,
+)
 
 logger = logging.getLogger(__name__)
 
 MAX_TOKENS = 4096
+MAX_BATCH_REQUESTS = 100
+TRIAGE_MAX_TOKENS = 256
+
+TRIAGE_REQUIRED_KEYS: frozenset[str] = frozenset(
+    {
+        "headline",
+        "relevance_score",
+        "content_type",
+    }
+)
 
 REQUIRED_KEYS: frozenset[str] = frozenset(
     {
@@ -87,35 +114,271 @@ async def process_article(article: dict[str, Any]) -> dict[str, Any] | None:
     except KeyError as exc:
         logger.error(f"article missing required field {exc} id={article.get('id')}")
         return None
-    text = await call_claude([{"role": "user", "content": message}], max_tokens=MAX_TOKENS)
+    text = await call_claude(
+        [{"role": "user", "content": message}],
+        max_tokens=MAX_TOKENS,
+        system=EXTRACTION_PROMPT,
+    )
     if text is None:
         return None
     return _parse_extraction(text)
 
 
-async def run_pipeline(batch_size: int = 50) -> dict[str, int]:
-    """Process up to ``batch_size`` unprocessed articles sequentially.
+def _parse_triage(text: str) -> dict[str, Any] | None:
+    """Parse a Haiku triage response; None on any defect (caller fails open).
 
-    Successful extractions are written back to the article doc (mapped to
-    article schema fields) and failures are recorded via
-    ``set_article_processing_error``, leaving the article in the queue for
-    the next run. Returns a summary of total/succeeded/failed counts.
+    Rejects a non-integer ``relevance_score`` — including booleans, which
+    Python treats as ints and which would otherwise be written to the
+    article doc as ``relevanceScore: true``.
+    """
+    parsed = parse_json_object(text)
+    if parsed is None:
+        return None
+    missing = TRIAGE_REQUIRED_KEYS - parsed.keys()
+    if missing:
+        logger.error(f"triage result missing required keys: {sorted(missing)}")
+        return None
+    score = parsed["relevance_score"]
+    if isinstance(score, bool) or not isinstance(score, int):
+        logger.error(f"triage relevance_score is not an integer: {score!r}")
+        return None
+    return parsed
+
+
+def _to_triage_update(result: dict[str, Any]) -> dict[str, Any]:
+    """Map a triage result to the article-doc update for a skipped article.
+
+    ``triage_only`` marks the article as pre-filtered (ADR 007): it was
+    scored below ``RELEVANCE_THRESHOLD`` and never went through full
+    extraction, so it carries no brands, vehicles, or features.
+    """
+    return {
+        "title_en": result["headline"],
+        "relevance_score": result["relevance_score"],
+        "content_type": result["content_type"],
+        "triage_only": True,
+    }
+
+
+async def triage_article(article: dict[str, Any]) -> dict[str, Any] | None:
+    """Score one article with Haiku; None on any failure (fail open).
+
+    Synchronous per-article call: at ~$0.003 per triage the Batch API's
+    overhead is not worth it. Returns the validated triage dict, or None
+    on API errors after retries, malformed JSON, missing keys, or a
+    missing title/body — the caller then sends the article to full
+    extraction rather than risk dropping a high-value one.
+    """
+    try:
+        message = build_extraction_message(article["title"], article["body"])
+    except KeyError as exc:
+        logger.error(f"article missing required field {exc} id={article.get('id')}")
+        return None
+    text = await call_claude(
+        [{"role": "user", "content": message}],
+        model=settings.HAIKU_MODEL,
+        max_tokens=TRIAGE_MAX_TOKENS,
+        system=TRIAGE_PROMPT,
+    )
+    if text is None:
+        return None
+    return _parse_triage(text)
+
+
+class _TriageResult(NamedTuple):
+    """Articles that passed triage plus the count skipped (written as processed)."""
+
+    passed: list[dict[str, Any]]
+    skipped: int
+
+
+async def triage_articles(articles: list[dict[str, Any]]) -> _TriageResult:
+    """Pre-filter articles with Haiku before full extraction (ADR 007).
+
+    Articles scoring below ``settings.RELEVANCE_THRESHOLD`` are marked
+    processed with triage-only fields (``titleEn``, ``relevanceScore``,
+    ``contentType``, ``triageOnly``) and excluded from extraction. Any
+    triage failure fails open: the article proceeds to full extraction.
+    """
+    passed: list[dict[str, Any]] = []
+    skipped = 0
+    for article in articles:
+        result = await triage_article(article)
+        if result is None or result["relevance_score"] >= settings.RELEVANCE_THRESHOLD:
+            passed.append(article)
+            continue
+        await update_article_after_processing(article["id"], _to_triage_update(result))
+        skipped += 1
+    logger.info(
+        f"Triage: {len(articles)} articles, {len(passed)} passed threshold, {skipped} skipped"
+    )
+    return _TriageResult(passed, skipped)
+
+
+class _ChunkStats(NamedTuple):
+    """Per-chunk outcome counts accumulated into the pipeline summary."""
+
+    succeeded: int
+    failed: int
+    errors_recorded: int
+
+
+def _build_batch_requests(articles: list[dict[str, Any]]) -> list[Request]:
+    """Build one batch request per article, keyed by Firestore doc ID.
+
+    Articles missing a title or body are skipped; they receive a
+    ``processingError`` later because their doc ID never appears in the
+    batch results. The extraction prompt is sent as a system block with a
+    ``cache_control`` breakpoint so the fixed prompt is served from the
+    prompt cache across the batch.
+    """
+    requests: list[Request] = []
+    for article in articles:
+        try:
+            message = build_extraction_message(article["title"], article["body"])
+        except KeyError as exc:
+            logger.error(f"article missing required field {exc} id={article.get('id')}")
+            continue
+        requests.append(
+            Request(
+                custom_id=article["id"],
+                params=MessageCreateParamsNonStreaming(
+                    model=settings.SONNET_MODEL,
+                    max_tokens=MAX_TOKENS,
+                    system=[
+                        {
+                            "type": "text",
+                            "text": EXTRACTION_PROMPT,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                    messages=[{"role": "user", "content": message}],
+                ),
+            )
+        )
+    return requests
+
+
+async def _write_back(article: dict[str, Any], result: dict[str, Any] | None) -> bool:
+    """Persist one article outcome to Firestore; return True on success.
+
+    Failures record ``processingError`` and leave ``processed == false``
+    so the article stays queued for the next run.
+    """
+    if result is not None:
+        await update_article_after_processing(article["id"], _to_article_update(result))
+        return True
+    await set_article_processing_error(article["id"], "LLM extraction failed")
+    return False
+
+
+async def _apply_batch_results(
+    articles: list[dict[str, Any]], results: dict[str, str | None]
+) -> _ChunkStats:
+    """Parse and write batch results back, one article at a time.
+
+    An article whose doc ID is missing from ``results`` (skipped at
+    request build, or dropped by the API) is treated the same as a failed
+    extraction.
+    """
+    succeeded = 0
+    failed = 0
+    for article in articles:
+        text = results.get(article["id"])
+        result = _parse_extraction(text) if text is not None else None
+        if await _write_back(article, result):
+            succeeded += 1
+        else:
+            failed += 1
+    return _ChunkStats(succeeded, failed, failed)
+
+
+async def _process_chunk_sync(articles: list[dict[str, Any]]) -> _ChunkStats:
+    """Process a chunk with synchronous per-article Claude calls (fallback path)."""
+    succeeded = 0
+    failed = 0
+    for article in articles:
+        result = await process_article(article)
+        if await _write_back(article, result):
+            succeeded += 1
+        else:
+            failed += 1
+    return _ChunkStats(succeeded, failed, failed)
+
+
+async def _process_batch_chunk(articles: list[dict[str, Any]]) -> _ChunkStats:
+    """Run one chunk of up to ``MAX_BATCH_REQUESTS`` articles through the Batch API.
+
+    Submission failure falls back to synchronous processing. A poll
+    timeout or results-streaming failure counts the chunk as failed
+    without recording per-article errors: those are batch-level
+    transients, and the articles stay queued for the next run.
+    """
+    requests = _build_batch_requests(articles)
+    if not requests:
+        return await _apply_batch_results(articles, {})
+    try:
+        batch_id = await submit_batch(requests)
+    except anthropic.AnthropicError as exc:
+        logger.warning(f"batch submission failed ({exc}); falling back to synchronous processing")
+        return await _process_chunk_sync(articles)
+    batch = await poll_batch(batch_id)
+    if batch is None:
+        logger.error(f"batch {batch_id} timed out; articles stay queued for the next run")
+        return _ChunkStats(0, len(articles), 0)
+    try:
+        results = await get_batch_results(batch_id)
+    except anthropic.AnthropicError as exc:
+        logger.error(f"batch results retrieval failed for {batch_id}: {exc}")
+        return _ChunkStats(0, len(articles), 0)
+    return await _apply_batch_results(articles, results)
+
+
+async def run_pipeline(batch_size: int = 50) -> dict[str, int]:
+    """Process up to ``batch_size`` unprocessed articles via the Batch API.
+
+    Articles are first triaged with Haiku (ADR 007): those scoring below
+    ``RELEVANCE_THRESHOLD`` are marked processed with triage-only fields
+    and skip extraction. The rest are submitted in sequential batches of
+    up to ``MAX_BATCH_REQUESTS`` requests each. Successful extractions
+    are written back to the article doc (mapped to article schema fields)
+    and failures are recorded via ``set_article_processing_error``,
+    leaving the article queued for the next run. Returns a summary of
+    total/succeeded/failed counts, the number of processing errors
+    recorded on article docs, and the count skipped by triage.
     """
     articles = await get_unprocessed_articles(limit=batch_size)
     total = len(articles)
+    if total == 0:
+        logger.info("no unprocessed articles")
+        return {
+            "total": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "processing_errors": 0,
+            "triage_skipped": 0,
+        }
     logger.info(f"processing {total} unprocessed articles")
 
-    succeeded = 0
-    failed = 0
-    for index, article in enumerate(articles, start=1):
-        result = await process_article(article)
-        if result is not None:
-            await update_article_after_processing(article["id"], _to_article_update(result))
-            succeeded += 1
-        else:
-            await set_article_processing_error(article["id"], "LLM extraction failed")
-            failed += 1
-        label = article.get("title") or article.get("source_url")
-        logger.info(f"Processed {index}/{total}: {label}")
+    passed, triage_skipped = await triage_articles(articles)
 
-    return {"total": total, "succeeded": succeeded, "failed": failed}
+    succeeded = triage_skipped  # skipped articles were written back as processed
+    failed = 0
+    errors_recorded = 0
+    for start in range(0, len(passed), MAX_BATCH_REQUESTS):
+        stats = await _process_batch_chunk(passed[start : start + MAX_BATCH_REQUESTS])
+        succeeded += stats.succeeded
+        failed += stats.failed
+        errors_recorded += stats.errors_recorded
+
+    logger.info(
+        f"pipeline summary: total={total} succeeded={succeeded} failed={failed} "
+        f"processing_errors={errors_recorded} triage_skipped={triage_skipped}"
+    )
+    return {
+        "total": total,
+        "succeeded": succeeded,
+        "failed": failed,
+        "processing_errors": errors_recorded,
+        "triage_skipped": triage_skipped,
+    }
