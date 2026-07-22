@@ -22,28 +22,28 @@ This is the template in `backend/processing/prompts.py`:
 You are an automotive intelligence analyst. Given this article about the
 Chinese EV/auto industry, extract the following:
 
-1. english_translation: Full English translation of the article.
-   If the article is already in English, return the original text.
-2. headline: One-line English headline.
-3. summary: 2-3 sentence English summary.
-4. relevance_score: 1-10 (10 = directly about software/AI/UX features
+1. headline: One-line English headline.
+2. summary: 2-3 sentence English summary.
+3. relevance_score: 1-10 (10 = directly about software/AI/UX features
    that Western OEMs should know about).
-5. brands_mentioned: List of brand name strings.
-6. vehicles_mentioned: List of specific model name strings.
-7. features_extracted: Array of objects, each with:
+4. brands_mentioned: List of brand name strings.
+5. vehicles_mentioned: List of specific model name strings.
+6. features_extracted: Array of objects, each with:
    - feature_name (string)
    - category (string, one of: adas, ai_assistant, infotainment,
      connectivity, ota, battery_software, cockpit_ux)
    - description (string)
    - supplier (string or null)
    - is_new (boolean, true if this is a new launch/announcement)
-8. competitive_signal: If this has implications for Western OEMs,
+7. competitive_signal: If this has implications for Western OEMs,
    1-2 sentences. Otherwise null.
-9. content_type: One of: news, review, teardown, forum_post, opinion,
+8. content_type: One of: news, review, teardown, forum_post, opinion,
    regulatory, earnings.
 
 Respond in JSON only. No markdown fences. No preamble.
 ```
+
+> **Note:** Full article translation was removed to reduce per-article API cost from ~$0.10 to ~$0.03. Translation will be added as an on-demand feature in Phase 5.
 
 ## Pipeline Input Shape
 
@@ -67,7 +67,6 @@ What Claude returns (JSON):
 
 ```python
 {
-    "english_translation": str,
     "headline": str,
     "summary": str,
     "relevance_score": int,             # 1-10
@@ -97,7 +96,7 @@ Each item in `features_extracted`:
 2. For each article, combine `EXTRACTION_PROMPT` with the article title and body.
 3. Call Claude API (Sonnet). Request JSON response.
 4. Parse JSON. Validate against expected schema.
-5. Update article doc: set `titleEn`, `bodyEn`, `relevanceScore`, `contentType`, `brandsMentioned`, `vehiclesMentioned`, `featuresExtracted`, `processed = true`.
+5. Update article doc: set `titleEn`, `relevanceScore`, `contentType`, `brandsMentioned`, `vehiclesMentioned`, `featuresExtracted`, `processed = true`. (`bodyEn` is not populated — see note above.)
 6. If `features_extracted` has items with `is_new == true`, create entries in `features` collection.
 7. Log: success/failure, token count, processing duration.
 

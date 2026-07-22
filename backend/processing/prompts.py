@@ -19,24 +19,22 @@ from anthropic.types import MessageParam
 EXTRACTION_PROMPT: str = """You are an automotive intelligence analyst. Given this article about the
 Chinese EV/auto industry, extract the following:
 
-1. english_translation: Full English translation of the article.
-   If the article is already in English, return the original text.
-2. headline: One-line English headline.
-3. summary: 2-3 sentence English summary.
-4. relevance_score: 1-10 (10 = directly about software/AI/UX features
+1. headline: One-line English headline.
+2. summary: 2-3 sentence English summary.
+3. relevance_score: 1-10 (10 = directly about software/AI/UX features
    that Western OEMs should know about).
-5. brands_mentioned: List of brand name strings.
-6. vehicles_mentioned: List of specific model name strings.
-7. features_extracted: Array of objects, each with:
+4. brands_mentioned: List of brand name strings.
+5. vehicles_mentioned: List of specific model name strings.
+6. features_extracted: Array of objects, each with:
    - feature_name (string)
    - category (string, one of: adas, ai_assistant, infotainment,
      connectivity, ota, battery_software, cockpit_ux)
    - description (string)
    - supplier (string or null)
    - is_new (boolean, true if this is a new launch/announcement)
-8. competitive_signal: If this has implications for Western OEMs,
+7. competitive_signal: If this has implications for Western OEMs,
    1-2 sentences. Otherwise null.
-9. content_type: One of: news, review, teardown, forum_post, opinion,
+8. content_type: One of: news, review, teardown, forum_post, opinion,
    regulatory, earnings.
 
 Respond in JSON only. No markdown fences. No preamble."""

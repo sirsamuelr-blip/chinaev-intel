@@ -11,6 +11,7 @@ Track known shortcuts, deferred improvements, and quality gaps.
 | 2026-07-20 | Runner scrapes all discovered articles per source with no per-source cap. Autohome discovers 180 per run — at ~15-90s each, a full run takes over an hour. | Resolved | Fixed: configurable MAX_ARTICLES_PER_SOURCE (default 25) added to runner |
 | 2026-07-20 | Duplicated _call_claude retry helper in entities.py (copied from pipeline.py to avoid circular import) | Resolved | Fixed: shared call_claude extracted to backend/processing/utils.py; pipeline, entities, and signals all import it |
 | 2026-07-20 | get_recent_processed_articles returns snake_case but dedup functions expect camelCase — conversion deferred to runner wiring | Resolved | Fixed: keys_to_camel (now public in db/firestore.py) bridge applied in runner.run_phase2_processing before the Phase 2 steps |
+| 2026-07-22 | Full article translation removed from extraction prompt to reduce API costs. bodyEn field not populated. Add on-demand translation in Phase 5 when subscriber dashboard needs it. | Medium | Implement translate-on-click in Phase 5 subscriber dashboard. |
 
 Severity: Critical (blocks release or security risk), High (fix within 2 weeks), Medium (fix before next phase), Low (nice to have).
 

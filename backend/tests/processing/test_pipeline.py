@@ -33,7 +33,6 @@ SAMPLE_ARTICLE = {
 }
 
 SAMPLE_EXTRACTION = {
-    "english_translation": "BYD announced today...",
     "headline": "BYD Launches New ADAS Feature for Han EV",
     "summary": "BYD has launched a new ADAS feature...",
     "relevance_score": 8,
@@ -223,9 +222,9 @@ class TestRunPipeline:
         (doc_id, updates) = last_call.args
         assert doc_id == "doc-2"
         assert updates["title_en"] == SAMPLE_EXTRACTION["headline"]
-        assert updates["body_en"] == SAMPLE_EXTRACTION["english_translation"]
         assert updates["relevance_score"] == 8
         assert "summary" not in updates
+        assert "body_en" not in updates
 
     async def test_run_pipeline_handles_mixed_results(
         self, monkeypatch: pytest.MonkeyPatch, firestore_mocks: dict[str, AsyncMock]

@@ -6,6 +6,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- Removed full English translation from extraction pipeline to reduce per-article API cost ~70%
+
 ### Added
 - XiaoHongShu scraper for consumer EV reviews and owner experiences (Playwright)
 - Dongchedi scraper for ByteDance automotive platform coverage (Playwright)

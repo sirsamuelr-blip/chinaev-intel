@@ -26,7 +26,6 @@ MAX_TOKENS = 4096
 
 REQUIRED_KEYS: frozenset[str] = frozenset(
     {
-        "english_translation",
         "headline",
         "summary",
         "relevance_score",
@@ -60,12 +59,13 @@ def _to_article_update(result: dict[str, Any]) -> dict[str, Any]:
     """Map an extraction result to the article-doc update fields.
 
     ``update_article_after_processing`` expects article schema fields
-    (title_en, body_en, ...) rather than Claude's raw output keys.
-    ``summary`` has no article field and is dropped.
+    (title_en, relevance_score, ...) rather than Claude's raw output keys.
+    ``summary`` has no article field and is dropped. ``body_en`` is not
+    set: full article translation was removed from the extraction to cut
+    per-article cost (see docs/tech-debt.md, 2026-07-22).
     """
     return {
         "title_en": result["headline"],
-        "body_en": result["english_translation"],
         "relevance_score": result["relevance_score"],
         "content_type": result["content_type"],
         "brands_mentioned": result["brands_mentioned"],
