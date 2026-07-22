@@ -31,7 +31,7 @@ from db.firestore import (
     save_health_metrics,
 )
 from processing.dedup import deduplicate_articles, mark_duplicates
-from processing.entities import promote_entities_from_article
+from processing.entities import BrandResolver, load_aliases, promote_entities_from_article
 from processing.novelty import score_article_batch, score_signal_batch
 from processing.pipeline import run_pipeline
 from processing.signals import detect_signals_from_articles
@@ -173,7 +173,9 @@ async def _phase2_promote_entities(articles: list[dict[str, Any]]) -> dict[str, 
     """Promote brands, vehicles, and features from each article.
 
     A single article's promotion failure is logged and skipped — the rest
-    of the batch still runs. Returns the summed promotion counts.
+    of the batch still runs. All articles share one ``BrandResolver`` so the
+    Sonnet fallback resolution cache and per-run call cap span the whole run.
+    Returns the summed promotion counts.
     """
     totals = {
         "articles_processed": 0,
@@ -181,9 +183,12 @@ async def _phase2_promote_entities(articles: list[dict[str, Any]]) -> dict[str, 
         "vehicles_promoted": 0,
         "features_promoted": 0,
     }
+    # One resolver for the whole run so a brand unknown to the alias dictionary
+    # is sent to Sonnet at most once across all articles, under a per-run cap.
+    resolver = BrandResolver(load_aliases())
     for article in articles:
         try:
-            counts = await promote_entities_from_article(article)
+            counts = await promote_entities_from_article(article, resolver)
         except Exception:
             logger.exception(f"entity promotion failed article_id={article.get('id')}")
             continue

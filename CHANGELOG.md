@@ -11,6 +11,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Removed full English translation from extraction pipeline to reduce per-article API cost ~70%
 
 ### Added
+- Expanded brand_aliases.json with 15+ Chinese EV sub-brands and added non-automotive brand filtering
+- Per-run brand-resolution cache and a Sonnet call cap (with brace-salvage JSON parsing) in entity promotion to bound API cost
 - Added Haiku pre-filtering to skip low-relevance articles before full Sonnet extraction
 - Added prompt caching on extraction prompt to reduce input token costs
 - XiaoHongShu scraper for consumer EV reviews and owner experiences (Playwright)
