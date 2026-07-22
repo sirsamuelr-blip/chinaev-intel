@@ -3,8 +3,8 @@
 All external calls are mocked — the Anthropic client is a MagicMock with an
 async ``messages.create`` (installed by patching ``anthropic.AsyncAnthropic``,
 which the shared ``processing.utils.call_claude`` helper constructs), and
-every Firestore helper is monkeypatched on the pipeline module. No real API
-calls, no real database calls, no real sleeps.
+every Firestore helper and Batch API helper is monkeypatched on the pipeline
+module. No real API calls, no real database calls, no real sleeps.
 """
 
 from __future__ import annotations
@@ -197,7 +197,7 @@ class TestProcessArticle:
 
 
 class TestRunPipeline:
-    """run_pipeline orchestrates the batch over the Firestore queue."""
+    """run_pipeline drives the Firestore queue through the Batch API."""
 
     @pytest.fixture
     def firestore_mocks(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
@@ -211,18 +211,36 @@ class TestRunPipeline:
             monkeypatch.setattr(pipeline, name, mock)
         return mocks
 
+    @pytest.fixture
+    def batch_mocks(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
+        """Mock the Batch API helpers on the pipeline module."""
+        mocks = {
+            "submit_batch": AsyncMock(return_value="batch_123"),
+            "poll_batch": AsyncMock(return_value=MagicMock(processing_status="ended")),
+            "get_batch_results": AsyncMock(return_value={}),
+        }
+        for name, mock in mocks.items():
+            monkeypatch.setattr(pipeline, name, mock)
+        return mocks
+
     def _articles(self, count: int) -> list[dict[str, Any]]:
         return [{**SAMPLE_ARTICLE, "id": f"doc-{i}"} for i in range(count)]
 
+    def _all_valid_results(self, count: int) -> dict[str, str]:
+        return {f"doc-{i}": json.dumps(SAMPLE_EXTRACTION) for i in range(count)}
+
     async def test_run_pipeline_processes_all_articles(
-        self, monkeypatch: pytest.MonkeyPatch, firestore_mocks: dict[str, AsyncMock]
+        self,
+        firestore_mocks: dict[str, AsyncMock],
+        batch_mocks: dict[str, AsyncMock],
     ) -> None:
         """Every article in the batch is processed and written back."""
         firestore_mocks["get_unprocessed_articles"].return_value = self._articles(3)
-        monkeypatch.setattr(pipeline, "process_article", AsyncMock(return_value=SAMPLE_EXTRACTION))
+        batch_mocks["get_batch_results"].return_value = self._all_valid_results(3)
 
-        await pipeline.run_pipeline()
+        summary = await pipeline.run_pipeline()
 
+        assert summary == {"total": 3, "succeeded": 3, "failed": 0, "processing_errors": 0}
         assert firestore_mocks["update_article_after_processing"].await_count == 3
         last_call = firestore_mocks["update_article_after_processing"].await_args
         assert last_call is not None
@@ -233,41 +251,175 @@ class TestRunPipeline:
         assert "summary" not in updates
         assert "body_en" not in updates
 
-    async def test_run_pipeline_handles_mixed_results(
-        self, monkeypatch: pytest.MonkeyPatch, firestore_mocks: dict[str, AsyncMock]
+    async def test_run_pipeline_builds_batch_requests(
+        self,
+        firestore_mocks: dict[str, AsyncMock],
+        batch_mocks: dict[str, AsyncMock],
     ) -> None:
-        """Successes are written back and failures recorded as errors."""
+        """Batch requests carry doc IDs, Sonnet, and the cached extraction prompt."""
+        firestore_mocks["get_unprocessed_articles"].return_value = self._articles(2)
+        batch_mocks["get_batch_results"].return_value = self._all_valid_results(2)
+
+        await pipeline.run_pipeline(batch_size=2)
+
+        firestore_mocks["get_unprocessed_articles"].assert_awaited_once_with(limit=2)
+        submit_call = batch_mocks["submit_batch"].await_args
+        assert submit_call is not None
+        requests = submit_call.args[0]
+        assert [request["custom_id"] for request in requests] == ["doc-0", "doc-1"]
+        params = requests[0]["params"]
+        assert params["model"] == settings.SONNET_MODEL
+        assert params["max_tokens"] == 4096
+        assert SAMPLE_ARTICLE["title"] in params["messages"][0]["content"]
+        assert params["system"] == [
+            {
+                "type": "text",
+                "text": EXTRACTION_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+
+    async def test_run_pipeline_handles_mixed_results(
+        self,
+        firestore_mocks: dict[str, AsyncMock],
+        batch_mocks: dict[str, AsyncMock],
+    ) -> None:
+        """Successes are written back; errored and missing results record errors."""
         firestore_mocks["get_unprocessed_articles"].return_value = self._articles(3)
-        monkeypatch.setattr(
-            pipeline,
-            "process_article",
-            AsyncMock(side_effect=[SAMPLE_EXTRACTION, None, SAMPLE_EXTRACTION]),
-        )
+        batch_mocks["get_batch_results"].return_value = {
+            "doc-0": json.dumps(SAMPLE_EXTRACTION),
+            "doc-1": None,
+        }
 
         summary = await pipeline.run_pipeline()
 
-        assert firestore_mocks["update_article_after_processing"].await_count == 2
+        assert firestore_mocks["update_article_after_processing"].await_count == 1
+        error_calls = firestore_mocks["set_article_processing_error"].await_args_list
+        assert [call.args for call in error_calls] == [
+            ("doc-1", "LLM extraction failed"),
+            ("doc-2", "LLM extraction failed"),
+        ]
+        assert summary == {"total": 3, "succeeded": 1, "failed": 2, "processing_errors": 2}
+
+    async def test_run_pipeline_invalid_json_marks_error(
+        self,
+        firestore_mocks: dict[str, AsyncMock],
+        batch_mocks: dict[str, AsyncMock],
+    ) -> None:
+        """A result that fails JSON parsing or key validation records an error."""
+        firestore_mocks["get_unprocessed_articles"].return_value = self._articles(1)
+        batch_mocks["get_batch_results"].return_value = {"doc-0": "not json at all"}
+
+        summary = await pipeline.run_pipeline()
+
+        firestore_mocks["set_article_processing_error"].assert_awaited_once_with(
+            "doc-0", "LLM extraction failed"
+        )
+        assert summary == {"total": 1, "succeeded": 0, "failed": 1, "processing_errors": 1}
+
+    async def test_run_pipeline_empty_queue(
+        self,
+        firestore_mocks: dict[str, AsyncMock],
+        batch_mocks: dict[str, AsyncMock],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """An empty queue skips batch submission and returns a zeroed summary."""
+        with caplog.at_level("INFO"):
+            summary = await pipeline.run_pipeline()
+
+        assert summary == {"total": 0, "succeeded": 0, "failed": 0, "processing_errors": 0}
+        batch_mocks["submit_batch"].assert_not_awaited()
+        firestore_mocks["update_article_after_processing"].assert_not_awaited()
+        firestore_mocks["set_article_processing_error"].assert_not_awaited()
+        assert "no unprocessed articles" in caplog.text
+
+    async def test_run_pipeline_falls_back_to_sync_on_submission_failure(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        firestore_mocks: dict[str, AsyncMock],
+        batch_mocks: dict[str, AsyncMock],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A failed batch submission processes the chunk synchronously instead."""
+        firestore_mocks["get_unprocessed_articles"].return_value = self._articles(2)
+        batch_mocks["submit_batch"].side_effect = anthropic.AnthropicError("api down")
+        process_article_mock = AsyncMock(return_value=SAMPLE_EXTRACTION)
+        monkeypatch.setattr(pipeline, "process_article", process_article_mock)
+
+        with caplog.at_level("WARNING"):
+            summary = await pipeline.run_pipeline()
+
+        assert summary == {"total": 2, "succeeded": 2, "failed": 0, "processing_errors": 0}
+        assert process_article_mock.await_count == 2
+        batch_mocks["poll_batch"].assert_not_awaited()
+        batch_mocks["get_batch_results"].assert_not_awaited()
+        assert "falling back to synchronous processing" in caplog.text
+
+    async def test_run_pipeline_batch_timeout_leaves_articles_queued(
+        self,
+        firestore_mocks: dict[str, AsyncMock],
+        batch_mocks: dict[str, AsyncMock],
+    ) -> None:
+        """A poll timeout counts articles as failed without Firestore writes."""
+        firestore_mocks["get_unprocessed_articles"].return_value = self._articles(3)
+        batch_mocks["poll_batch"].return_value = None
+
+        summary = await pipeline.run_pipeline()
+
+        assert summary == {"total": 3, "succeeded": 0, "failed": 3, "processing_errors": 0}
+        firestore_mocks["update_article_after_processing"].assert_not_awaited()
+        firestore_mocks["set_article_processing_error"].assert_not_awaited()
+
+    async def test_run_pipeline_chunks_at_100_articles(
+        self,
+        firestore_mocks: dict[str, AsyncMock],
+        batch_mocks: dict[str, AsyncMock],
+    ) -> None:
+        """More than 100 articles are submitted as sequential batches."""
+        firestore_mocks["get_unprocessed_articles"].return_value = self._articles(150)
+        batch_mocks["get_batch_results"].return_value = self._all_valid_results(150)
+
+        summary = await pipeline.run_pipeline(batch_size=150)
+
+        assert batch_mocks["submit_batch"].await_count == 2
+        submit_calls = batch_mocks["submit_batch"].await_args_list
+        assert len(submit_calls[0].args[0]) == 100
+        assert len(submit_calls[1].args[0]) == 50
+        assert summary == {"total": 150, "succeeded": 150, "failed": 0, "processing_errors": 0}
+
+    async def test_run_pipeline_article_missing_body_gets_error(
+        self,
+        firestore_mocks: dict[str, AsyncMock],
+        batch_mocks: dict[str, AsyncMock],
+    ) -> None:
+        """An article missing a body is excluded from the batch but still errored."""
+        incomplete = {k: v for k, v in SAMPLE_ARTICLE.items() if k != "body"}
+        incomplete["id"] = "doc-1"
+        articles = [{**SAMPLE_ARTICLE, "id": "doc-0"}, incomplete]
+        firestore_mocks["get_unprocessed_articles"].return_value = articles
+        batch_mocks["get_batch_results"].return_value = self._all_valid_results(1)
+
+        summary = await pipeline.run_pipeline()
+
+        submit_call = batch_mocks["submit_batch"].await_args
+        assert submit_call is not None
+        assert [request["custom_id"] for request in submit_call.args[0]] == ["doc-0"]
         firestore_mocks["set_article_processing_error"].assert_awaited_once_with(
             "doc-1", "LLM extraction failed"
         )
-        assert summary == {"total": 3, "succeeded": 2, "failed": 1}
+        assert summary == {"total": 2, "succeeded": 1, "failed": 1, "processing_errors": 1}
 
-    async def test_run_pipeline_returns_summary(
-        self, monkeypatch: pytest.MonkeyPatch, firestore_mocks: dict[str, AsyncMock]
+    async def test_run_pipeline_logs_summary(
+        self,
+        firestore_mocks: dict[str, AsyncMock],
+        batch_mocks: dict[str, AsyncMock],
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """The summary dict reports total, succeeded, and failed counts."""
+        """The run ends with a summary log of all four counts."""
         firestore_mocks["get_unprocessed_articles"].return_value = self._articles(2)
-        monkeypatch.setattr(pipeline, "process_article", AsyncMock(return_value=SAMPLE_EXTRACTION))
+        batch_mocks["get_batch_results"].return_value = self._all_valid_results(2)
 
-        summary = await pipeline.run_pipeline(batch_size=2)
+        with caplog.at_level("INFO"):
+            await pipeline.run_pipeline()
 
-        firestore_mocks["get_unprocessed_articles"].assert_awaited_once_with(limit=2)
-        assert summary == {"total": 2, "succeeded": 2, "failed": 0}
-
-    async def test_run_pipeline_empty_queue(self, firestore_mocks: dict[str, AsyncMock]) -> None:
-        """An empty queue returns a zeroed summary without any writes."""
-        summary = await pipeline.run_pipeline()
-
-        assert summary == {"total": 0, "succeeded": 0, "failed": 0}
-        firestore_mocks["update_article_after_processing"].assert_not_awaited()
-        firestore_mocks["set_article_processing_error"].assert_not_awaited()
+        assert "pipeline summary: total=2 succeeded=2 failed=0 processing_errors=0" in caplog.text

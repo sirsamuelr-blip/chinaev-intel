@@ -94,18 +94,24 @@ Each item in `features_extracted`:
 
 ## Pipeline Flow
 
+> **Batch API:** The pipeline uses the Anthropic Message Batches API for 50% cost reduction. Batch requests are polled every 30 seconds with a 2-hour timeout. If batch submission fails, the pipeline falls back to synchronous processing.
+
 1. Query Firestore: articles where `processed == false`, ordered by `scrapeDate` asc.
-2. For each article, send `EXTRACTION_PROMPT` as the system prompt (with a `cache_control` breakpoint) and the article title and body as the user message.
-3. Call Claude API (Sonnet). Request JSON response.
-4. Parse JSON. Validate against expected schema.
-5. Update article doc: set `titleEn`, `relevanceScore`, `contentType`, `brandsMentioned`, `vehiclesMentioned`, `featuresExtracted`, `processed = true`. (`bodyEn` is not populated — see note above.)
-6. If `features_extracted` has items with `is_new == true`, create entries in `features` collection.
-7. Log: success/failure, token count, processing duration.
+2. Build one batch request per article, using the Firestore doc ID as the `custom_id`. Each request sends `EXTRACTION_PROMPT` as the system prompt (with a `cache_control` breakpoint) and the article title and body as the user message. Model: Sonnet. JSON response requested.
+3. Submit the batch via the Message Batches API, capped at 100 requests per batch. More than 100 unprocessed articles are submitted as multiple batches, sequentially.
+4. Poll the batch every 30 seconds until its status is `ended` (2-hour timeout).
+5. Stream the batch results and map them back to articles by `custom_id`.
+6. For each result: parse JSON, validate against expected schema, then update the article doc: set `titleEn`, `relevanceScore`, `contentType`, `brandsMentioned`, `vehiclesMentioned`, `featuresExtracted`, `processed = true`. (`bodyEn` is not populated — see note above.)
+7. If `features_extracted` has items with `is_new == true`, create entries in `features` collection.
+8. Log summary: total processed, successes, failures, processing errors.
 
 ## Error Handling
 
 - Invalid JSON from Claude: log error, set `processingError` field on article doc. Do NOT set `processed = true`. Skip to next article.
-- API failure (rate limit, timeout, server error): retry with exponential backoff, max 3 retries.
+- Batch submission failure: log a warning and fall back to synchronous per-article processing (full price) for that batch.
+- Batch poll timeout or results retrieval failure: log error; affected articles keep `processed == false` with no `processingError`, so they are retried on the next run.
+- Errored/canceled/expired batch result, or a doc ID missing from the results: treated as a failed extraction — set `processingError`, do NOT set `processed = true`.
+- API failure on the synchronous fallback path (rate limit, timeout, server error): retry with exponential backoff, max 3 retries.
 - Single article failure must never crash the pipeline run.
 
 ## Automotive Glossary
