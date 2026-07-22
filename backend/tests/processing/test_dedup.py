@@ -10,6 +10,7 @@ the dedup functions expect.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock
@@ -155,6 +156,93 @@ class TestDateWithinWindow:
         assert dedup.date_within_window(aware, naive) is True
 
 
+class TestResolveArticleDate:
+    """_resolve_article_date parses a date field and falls back to scrapeDate."""
+
+    def test_valid_publish_date_used_directly(self) -> None:
+        """A parseable publishDate is returned as-is, no fallback needed."""
+        article = {
+            "id": "doc-a",
+            "publishDate": "2026-07-17T08:00:00+00:00",
+            "scrapeDate": "2026-07-17T10:00:00+00:00",
+        }
+
+        assert dedup._resolve_article_date(article, "publishDate") == datetime(
+            2026, 7, 17, 8, 0, tzinfo=UTC
+        )
+
+    def test_empty_string_falls_back_without_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """An empty publishDate falls back to scrapeDate and logs nothing."""
+        article = {"id": "doc-a", "publishDate": "", "scrapeDate": "2026-07-17T10:00:00+00:00"}
+
+        with caplog.at_level(logging.DEBUG, logger="processing.dedup"):
+            resolved = dedup._resolve_article_date(article, "publishDate")
+
+        assert resolved == datetime(2026, 7, 17, 10, 0, tzinfo=UTC)
+        assert caplog.records == []
+
+    def test_none_falls_back_without_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A None publishDate falls back to scrapeDate and logs nothing."""
+        article = {"id": "doc-a", "publishDate": None, "scrapeDate": "2026-07-17T10:00:00+00:00"}
+
+        with caplog.at_level(logging.DEBUG, logger="processing.dedup"):
+            resolved = dedup._resolve_article_date(article, "publishDate")
+
+        assert resolved == datetime(2026, 7, 17, 10, 0, tzinfo=UTC)
+        assert caplog.records == []
+
+    def test_missing_key_falls_back_without_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """An absent publishDate key falls back to scrapeDate and logs nothing."""
+        article = {"id": "doc-a", "scrapeDate": "2026-07-17T10:00:00+00:00"}
+
+        with caplog.at_level(logging.DEBUG, logger="processing.dedup"):
+            resolved = dedup._resolve_article_date(article, "publishDate")
+
+        assert resolved == datetime(2026, 7, 17, 10, 0, tzinfo=UTC)
+        assert caplog.records == []
+
+    def test_malformed_string_logs_debug_and_falls_back(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A non-empty unparseable publishDate logs at DEBUG and falls back."""
+        article = {
+            "id": "doc-a",
+            "publishDate": "not-a-real-date",
+            "scrapeDate": "2026-07-17T10:00:00+00:00",
+        }
+
+        with caplog.at_level(logging.DEBUG, logger="processing.dedup"):
+            resolved = dedup._resolve_article_date(article, "publishDate")
+
+        assert resolved == datetime(2026, 7, 17, 10, 0, tzinfo=UTC)
+        assert len(caplog.records) == 1
+        record = caplog.records[0]
+        assert record.levelno == logging.DEBUG
+        assert "doc-a" in record.getMessage()
+        assert "not-a-real-date" in record.getMessage()
+
+    def test_never_emits_warning_on_bad_dates(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Neither empty nor malformed dates ever produce a WARNING (the old spam)."""
+        with caplog.at_level(logging.DEBUG, logger="processing.dedup"):
+            dedup._resolve_article_date({"id": "x", "publishDate": ""}, "publishDate")
+            dedup._resolve_article_date({"id": "y", "publishDate": "garbage"}, "publishDate")
+
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+    def test_no_fallback_when_field_is_scrape_date(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A malformed scrapeDate logs at DEBUG and returns None (no self-fallback)."""
+        article = {"id": "doc-a", "scrapeDate": "bogus"}
+
+        with caplog.at_level(logging.DEBUG, logger="processing.dedup"):
+            resolved = dedup._resolve_article_date(article, "scrapeDate", fallback_field=None)
+
+        assert resolved is None
+        assert len(caplog.records) == 1
+        assert caplog.records[0].levelno == logging.DEBUG
+
+
 class TestExtractFeatureCategories:
     """extract_feature_categories pulls unique categories from feature arrays."""
 
@@ -224,6 +312,15 @@ class TestComputeSimilarity:
         del article_b["vehiclesMentioned"]
 
         assert dedup.compute_similarity(article_a, article_b) == pytest.approx(0.8)
+
+    def test_empty_publish_date_falls_back_to_scrape_date(self) -> None:
+        """Empty publishDates fall back to scrapeDate so the window still applies."""
+        article_a = _make_article(publishDate="")
+        article_b = _make_article(id="doc-b", sourceName="cnevpost", publishDate="")
+
+        # Both scrapeDates default to within the window, so the pair is still
+        # compared instead of being forced to 0.0 by the missing publish date.
+        assert dedup.compute_similarity(article_a, article_b) == pytest.approx(1.0)
 
 
 class TestFindDuplicatesForArticle:
