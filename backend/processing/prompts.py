@@ -4,6 +4,9 @@
 edit it here without updating the spec. It is sent as a cached system prompt
 (see ``utils.call_claude``); ``build_extraction_message`` formats a single
 article's title and body as the accompanying user message.
+``TRIAGE_PROMPT`` backs the Haiku pre-filter (ADR 007) and is likewise
+mirrored in docs/llm-pipeline.md: a minimal prompt requesting only the
+fields needed to decide whether an article warrants full extraction.
 ``BRAND_RESOLUTION_PROMPT`` backs the entity promotion fallback (ADR 005):
 it asks Sonnet to resolve a brand name the alias dictionary does not know.
 ``SIGNAL_NARRATIVE_PROMPT`` backs Stage 2 of signal detection (ADR 003): it
@@ -36,6 +39,18 @@ Chinese EV/auto industry, extract the following:
 7. competitive_signal: If this has implications for Western OEMs,
    1-2 sentences. Otherwise null.
 8. content_type: One of: news, review, teardown, forum_post, opinion,
+   regulatory, earnings.
+
+Respond in JSON only. No markdown fences. No preamble."""
+
+
+TRIAGE_PROMPT: str = """You are an automotive intelligence analyst. Given this article about the
+Chinese EV/auto industry, extract the following:
+
+1. headline: One-line English headline.
+2. relevance_score: 1-10 (10 = directly about software/AI/UX features
+   that Western OEMs should know about).
+3. content_type: One of: news, review, teardown, forum_post, opinion,
    regulatory, earnings.
 
 Respond in JSON only. No markdown fences. No preamble."""

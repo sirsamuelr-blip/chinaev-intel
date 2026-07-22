@@ -11,6 +11,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Removed full English translation from extraction pipeline to reduce per-article API cost ~70%
 
 ### Added
+- Added Haiku pre-filtering to skip low-relevance articles before full Sonnet extraction
 - Added prompt caching on extraction prompt to reduce input token costs
 - XiaoHongShu scraper for consumer EV reviews and owner experiences (Playwright)
 - Dongchedi scraper for ByteDance automotive platform coverage (Playwright)

@@ -13,6 +13,7 @@ Track known shortcuts, deferred improvements, and quality gaps.
 | 2026-07-20 | get_recent_processed_articles returns snake_case but dedup functions expect camelCase — conversion deferred to runner wiring | Resolved | Fixed: keys_to_camel (now public in db/firestore.py) bridge applied in runner.run_phase2_processing before the Phase 2 steps |
 | 2026-07-22 | Full article translation removed from extraction prompt to reduce API costs. bodyEn field not populated. Add on-demand translation in Phase 5 when subscriber dashboard needs it. | Medium | Implement translate-on-click in Phase 5 subscriber dashboard. |
 | 2026-07-22 | Batch API fallback to synchronous processing is a safety net but means a batch API outage silently doubles costs (full-price sync calls, surfaced only as a log warning). | Medium | Add monitoring/alerting for fallback triggers (e.g. counter in scraper_health or log-based alert). |
+| 2026-07-22 | Phase 2 signal detection and entity promotion do not skip `triageOnly` articles (ADR 007). They tolerate the missing extraction fields via `.get(...) or []` defaults, so triage-only docs flow through with empty brand/feature lists — harmless but slightly wasteful. | Low | Add an explicit `triageOnly` filter to the Phase 2 article queries/loops when next touching Phase 2 code. |
 
 Severity: Critical (blocks release or security risk), High (fix within 2 weeks), Medium (fix before next phase), Low (nice to have).
 

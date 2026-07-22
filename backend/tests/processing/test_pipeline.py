@@ -19,7 +19,7 @@ import pytest
 
 from config import settings
 from processing import pipeline
-from processing.prompts import EXTRACTION_PROMPT, build_extraction_message
+from processing.prompts import EXTRACTION_PROMPT, TRIAGE_PROMPT, build_extraction_message
 
 SAMPLE_ARTICLE = {
     "id": "test-doc-123",
@@ -48,6 +48,12 @@ SAMPLE_EXTRACTION = {
         }
     ],
     "competitive_signal": "BYD's rapid ADAS rollout...",
+    "content_type": "news",
+}
+
+SAMPLE_TRIAGE = {
+    "headline": "BYD Launches New ADAS Feature for Han EV",
+    "relevance_score": 2,
     "content_type": "news",
 }
 
@@ -82,6 +88,40 @@ def no_sleep(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     sleep = AsyncMock()
     monkeypatch.setattr(asyncio, "sleep", sleep)
     return sleep
+
+
+@pytest.fixture
+def firestore_mocks(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
+    """Mock the Firestore helpers on the pipeline module."""
+    mocks = {
+        "get_unprocessed_articles": AsyncMock(return_value=[]),
+        "update_article_after_processing": AsyncMock(),
+        "set_article_processing_error": AsyncMock(),
+    }
+    for name, mock in mocks.items():
+        monkeypatch.setattr(pipeline, name, mock)
+    return mocks
+
+
+@pytest.fixture
+def batch_mocks(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
+    """Mock the Batch API helpers on the pipeline module."""
+    mocks = {
+        "submit_batch": AsyncMock(return_value="batch_123"),
+        "poll_batch": AsyncMock(return_value=MagicMock(processing_status="ended")),
+        "get_batch_results": AsyncMock(return_value={}),
+    }
+    for name, mock in mocks.items():
+        monkeypatch.setattr(pipeline, name, mock)
+    return mocks
+
+
+def _articles(count: int) -> list[dict[str, Any]]:
+    return [{**SAMPLE_ARTICLE, "id": f"doc-{i}"} for i in range(count)]
+
+
+def _all_valid_results(count: int) -> dict[str, str]:
+    return {f"doc-{i}": json.dumps(SAMPLE_EXTRACTION) for i in range(count)}
 
 
 class TestPrompts:
@@ -199,35 +239,12 @@ class TestProcessArticle:
 class TestRunPipeline:
     """run_pipeline drives the Firestore queue through the Batch API."""
 
-    @pytest.fixture
-    def firestore_mocks(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
-        """Mock the Firestore helpers on the pipeline module."""
-        mocks = {
-            "get_unprocessed_articles": AsyncMock(return_value=[]),
-            "update_article_after_processing": AsyncMock(),
-            "set_article_processing_error": AsyncMock(),
-        }
-        for name, mock in mocks.items():
-            monkeypatch.setattr(pipeline, name, mock)
-        return mocks
-
-    @pytest.fixture
-    def batch_mocks(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
-        """Mock the Batch API helpers on the pipeline module."""
-        mocks = {
-            "submit_batch": AsyncMock(return_value="batch_123"),
-            "poll_batch": AsyncMock(return_value=MagicMock(processing_status="ended")),
-            "get_batch_results": AsyncMock(return_value={}),
-        }
-        for name, mock in mocks.items():
-            monkeypatch.setattr(pipeline, name, mock)
-        return mocks
-
-    def _articles(self, count: int) -> list[dict[str, Any]]:
-        return [{**SAMPLE_ARTICLE, "id": f"doc-{i}"} for i in range(count)]
-
-    def _all_valid_results(self, count: int) -> dict[str, str]:
-        return {f"doc-{i}": json.dumps(SAMPLE_EXTRACTION) for i in range(count)}
+    @pytest.fixture(autouse=True)
+    def triage_fail_open(self, monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+        """Fail triage open so every article reaches the extraction batch, as before."""
+        mock = AsyncMock(return_value=None)
+        monkeypatch.setattr(pipeline, "triage_article", mock)
+        return mock
 
     async def test_run_pipeline_processes_all_articles(
         self,
@@ -235,12 +252,18 @@ class TestRunPipeline:
         batch_mocks: dict[str, AsyncMock],
     ) -> None:
         """Every article in the batch is processed and written back."""
-        firestore_mocks["get_unprocessed_articles"].return_value = self._articles(3)
-        batch_mocks["get_batch_results"].return_value = self._all_valid_results(3)
+        firestore_mocks["get_unprocessed_articles"].return_value = _articles(3)
+        batch_mocks["get_batch_results"].return_value = _all_valid_results(3)
 
         summary = await pipeline.run_pipeline()
 
-        assert summary == {"total": 3, "succeeded": 3, "failed": 0, "processing_errors": 0}
+        assert summary == {
+            "total": 3,
+            "succeeded": 3,
+            "failed": 0,
+            "processing_errors": 0,
+            "triage_skipped": 0,
+        }
         assert firestore_mocks["update_article_after_processing"].await_count == 3
         last_call = firestore_mocks["update_article_after_processing"].await_args
         assert last_call is not None
@@ -257,8 +280,8 @@ class TestRunPipeline:
         batch_mocks: dict[str, AsyncMock],
     ) -> None:
         """Batch requests carry doc IDs, Sonnet, and the cached extraction prompt."""
-        firestore_mocks["get_unprocessed_articles"].return_value = self._articles(2)
-        batch_mocks["get_batch_results"].return_value = self._all_valid_results(2)
+        firestore_mocks["get_unprocessed_articles"].return_value = _articles(2)
+        batch_mocks["get_batch_results"].return_value = _all_valid_results(2)
 
         await pipeline.run_pipeline(batch_size=2)
 
@@ -285,7 +308,7 @@ class TestRunPipeline:
         batch_mocks: dict[str, AsyncMock],
     ) -> None:
         """Successes are written back; errored and missing results record errors."""
-        firestore_mocks["get_unprocessed_articles"].return_value = self._articles(3)
+        firestore_mocks["get_unprocessed_articles"].return_value = _articles(3)
         batch_mocks["get_batch_results"].return_value = {
             "doc-0": json.dumps(SAMPLE_EXTRACTION),
             "doc-1": None,
@@ -299,7 +322,13 @@ class TestRunPipeline:
             ("doc-1", "LLM extraction failed"),
             ("doc-2", "LLM extraction failed"),
         ]
-        assert summary == {"total": 3, "succeeded": 1, "failed": 2, "processing_errors": 2}
+        assert summary == {
+            "total": 3,
+            "succeeded": 1,
+            "failed": 2,
+            "processing_errors": 2,
+            "triage_skipped": 0,
+        }
 
     async def test_run_pipeline_invalid_json_marks_error(
         self,
@@ -307,7 +336,7 @@ class TestRunPipeline:
         batch_mocks: dict[str, AsyncMock],
     ) -> None:
         """A result that fails JSON parsing or key validation records an error."""
-        firestore_mocks["get_unprocessed_articles"].return_value = self._articles(1)
+        firestore_mocks["get_unprocessed_articles"].return_value = _articles(1)
         batch_mocks["get_batch_results"].return_value = {"doc-0": "not json at all"}
 
         summary = await pipeline.run_pipeline()
@@ -315,7 +344,13 @@ class TestRunPipeline:
         firestore_mocks["set_article_processing_error"].assert_awaited_once_with(
             "doc-0", "LLM extraction failed"
         )
-        assert summary == {"total": 1, "succeeded": 0, "failed": 1, "processing_errors": 1}
+        assert summary == {
+            "total": 1,
+            "succeeded": 0,
+            "failed": 1,
+            "processing_errors": 1,
+            "triage_skipped": 0,
+        }
 
     async def test_run_pipeline_empty_queue(
         self,
@@ -327,7 +362,13 @@ class TestRunPipeline:
         with caplog.at_level("INFO"):
             summary = await pipeline.run_pipeline()
 
-        assert summary == {"total": 0, "succeeded": 0, "failed": 0, "processing_errors": 0}
+        assert summary == {
+            "total": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "processing_errors": 0,
+            "triage_skipped": 0,
+        }
         batch_mocks["submit_batch"].assert_not_awaited()
         firestore_mocks["update_article_after_processing"].assert_not_awaited()
         firestore_mocks["set_article_processing_error"].assert_not_awaited()
@@ -341,7 +382,7 @@ class TestRunPipeline:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """A failed batch submission processes the chunk synchronously instead."""
-        firestore_mocks["get_unprocessed_articles"].return_value = self._articles(2)
+        firestore_mocks["get_unprocessed_articles"].return_value = _articles(2)
         batch_mocks["submit_batch"].side_effect = anthropic.AnthropicError("api down")
         process_article_mock = AsyncMock(return_value=SAMPLE_EXTRACTION)
         monkeypatch.setattr(pipeline, "process_article", process_article_mock)
@@ -349,7 +390,13 @@ class TestRunPipeline:
         with caplog.at_level("WARNING"):
             summary = await pipeline.run_pipeline()
 
-        assert summary == {"total": 2, "succeeded": 2, "failed": 0, "processing_errors": 0}
+        assert summary == {
+            "total": 2,
+            "succeeded": 2,
+            "failed": 0,
+            "processing_errors": 0,
+            "triage_skipped": 0,
+        }
         assert process_article_mock.await_count == 2
         batch_mocks["poll_batch"].assert_not_awaited()
         batch_mocks["get_batch_results"].assert_not_awaited()
@@ -361,12 +408,18 @@ class TestRunPipeline:
         batch_mocks: dict[str, AsyncMock],
     ) -> None:
         """A poll timeout counts articles as failed without Firestore writes."""
-        firestore_mocks["get_unprocessed_articles"].return_value = self._articles(3)
+        firestore_mocks["get_unprocessed_articles"].return_value = _articles(3)
         batch_mocks["poll_batch"].return_value = None
 
         summary = await pipeline.run_pipeline()
 
-        assert summary == {"total": 3, "succeeded": 0, "failed": 3, "processing_errors": 0}
+        assert summary == {
+            "total": 3,
+            "succeeded": 0,
+            "failed": 3,
+            "processing_errors": 0,
+            "triage_skipped": 0,
+        }
         firestore_mocks["update_article_after_processing"].assert_not_awaited()
         firestore_mocks["set_article_processing_error"].assert_not_awaited()
 
@@ -376,8 +429,8 @@ class TestRunPipeline:
         batch_mocks: dict[str, AsyncMock],
     ) -> None:
         """More than 100 articles are submitted as sequential batches."""
-        firestore_mocks["get_unprocessed_articles"].return_value = self._articles(150)
-        batch_mocks["get_batch_results"].return_value = self._all_valid_results(150)
+        firestore_mocks["get_unprocessed_articles"].return_value = _articles(150)
+        batch_mocks["get_batch_results"].return_value = _all_valid_results(150)
 
         summary = await pipeline.run_pipeline(batch_size=150)
 
@@ -385,7 +438,13 @@ class TestRunPipeline:
         submit_calls = batch_mocks["submit_batch"].await_args_list
         assert len(submit_calls[0].args[0]) == 100
         assert len(submit_calls[1].args[0]) == 50
-        assert summary == {"total": 150, "succeeded": 150, "failed": 0, "processing_errors": 0}
+        assert summary == {
+            "total": 150,
+            "succeeded": 150,
+            "failed": 0,
+            "processing_errors": 0,
+            "triage_skipped": 0,
+        }
 
     async def test_run_pipeline_article_missing_body_gets_error(
         self,
@@ -397,7 +456,7 @@ class TestRunPipeline:
         incomplete["id"] = "doc-1"
         articles = [{**SAMPLE_ARTICLE, "id": "doc-0"}, incomplete]
         firestore_mocks["get_unprocessed_articles"].return_value = articles
-        batch_mocks["get_batch_results"].return_value = self._all_valid_results(1)
+        batch_mocks["get_batch_results"].return_value = _all_valid_results(1)
 
         summary = await pipeline.run_pipeline()
 
@@ -407,7 +466,13 @@ class TestRunPipeline:
         firestore_mocks["set_article_processing_error"].assert_awaited_once_with(
             "doc-1", "LLM extraction failed"
         )
-        assert summary == {"total": 2, "succeeded": 1, "failed": 1, "processing_errors": 1}
+        assert summary == {
+            "total": 2,
+            "succeeded": 1,
+            "failed": 1,
+            "processing_errors": 1,
+            "triage_skipped": 0,
+        }
 
     async def test_run_pipeline_logs_summary(
         self,
@@ -416,10 +481,253 @@ class TestRunPipeline:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """The run ends with a summary log of all four counts."""
-        firestore_mocks["get_unprocessed_articles"].return_value = self._articles(2)
-        batch_mocks["get_batch_results"].return_value = self._all_valid_results(2)
+        firestore_mocks["get_unprocessed_articles"].return_value = _articles(2)
+        batch_mocks["get_batch_results"].return_value = _all_valid_results(2)
 
         with caplog.at_level("INFO"):
             await pipeline.run_pipeline()
 
-        assert "pipeline summary: total=2 succeeded=2 failed=0 processing_errors=0" in caplog.text
+        assert (
+            "pipeline summary: total=2 succeeded=2 failed=0 processing_errors=0 triage_skipped=0"
+            in caplog.text
+        )
+
+
+class TestTriageArticle:
+    """triage_article calls Haiku, parses JSON, and validates the result."""
+
+    async def test_triage_article_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A valid triage response is parsed and returned as a dict."""
+        triage = {**SAMPLE_TRIAGE, "relevance_score": 8}
+        client = _make_client(json.dumps(triage))
+        _install_client(monkeypatch, client)
+
+        result = await pipeline.triage_article(SAMPLE_ARTICLE)
+
+        assert result == triage
+        client.messages.create.assert_awaited_once()
+        call_kwargs = client.messages.create.await_args.kwargs
+        assert call_kwargs["model"] == settings.HAIKU_MODEL
+        assert call_kwargs["max_tokens"] == 256
+        assert SAMPLE_ARTICLE["title"] in call_kwargs["messages"][0]["content"]
+        assert call_kwargs["system"] == [
+            {
+                "type": "text",
+                "text": TRIAGE_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+
+    async def test_triage_article_api_error_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch, no_sleep: AsyncMock
+    ) -> None:
+        """A persistently failing API call fails open with None."""
+        client = _make_failing_client(anthropic.AnthropicError("server overloaded"))
+        _install_client(monkeypatch, client)
+
+        assert await pipeline.triage_article(SAMPLE_ARTICLE) is None
+
+    async def test_triage_article_invalid_json_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-JSON response fails open with None."""
+        _install_client(monkeypatch, _make_client("I could not triage this article, sorry."))
+
+        assert await pipeline.triage_article(SAMPLE_ARTICLE) is None
+
+    async def test_triage_article_missing_key_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A response missing a required key fails open with None."""
+        incomplete = {k: v for k, v in SAMPLE_TRIAGE.items() if k != "content_type"}
+        _install_client(monkeypatch, _make_client(json.dumps(incomplete)))
+
+        assert await pipeline.triage_article(SAMPLE_ARTICLE) is None
+
+    @pytest.mark.parametrize("bad_score", ["high", 7.5, True, None])
+    async def test_triage_article_non_int_score_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch, bad_score: Any
+    ) -> None:
+        """A non-integer relevance_score (including bool) fails open with None."""
+        _install_client(
+            monkeypatch, _make_client(json.dumps({**SAMPLE_TRIAGE, "relevance_score": bad_score}))
+        )
+
+        assert await pipeline.triage_article(SAMPLE_ARTICLE) is None
+
+    async def test_triage_article_missing_body_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An article without a body fails open with None and never calls the API."""
+        client = _make_client(json.dumps(SAMPLE_TRIAGE))
+        _install_client(monkeypatch, client)
+        incomplete = {k: v for k, v in SAMPLE_ARTICLE.items() if k != "body"}
+
+        assert await pipeline.triage_article(incomplete) is None
+        client.messages.create.assert_not_awaited()
+
+
+class TestRunPipelineTriage:
+    """run_pipeline filters low-relevance articles via real triage logic."""
+
+    @pytest.fixture
+    def triage_claude(self, monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+        """Mock call_claude on the pipeline module (only triage uses it on the batch path)."""
+        mock = AsyncMock(return_value=json.dumps({**SAMPLE_TRIAGE, "relevance_score": 8}))
+        monkeypatch.setattr(pipeline, "call_claude", mock)
+        return mock
+
+    def _scores(self, *scores: int) -> list[str]:
+        return [json.dumps({**SAMPLE_TRIAGE, "relevance_score": s}) for s in scores]
+
+    async def test_triage_filters_low_relevance_articles(
+        self,
+        firestore_mocks: dict[str, AsyncMock],
+        batch_mocks: dict[str, AsyncMock],
+        triage_claude: AsyncMock,
+    ) -> None:
+        """Below-threshold articles are written as triage-only; the rest are batched."""
+        firestore_mocks["get_unprocessed_articles"].return_value = _articles(3)
+        triage_claude.side_effect = self._scores(2, 8, 3)
+        batch_mocks["get_batch_results"].return_value = {"doc-1": json.dumps(SAMPLE_EXTRACTION)}
+
+        summary = await pipeline.run_pipeline()
+
+        submit_call = batch_mocks["submit_batch"].await_args
+        assert submit_call is not None
+        assert [request["custom_id"] for request in submit_call.args[0]] == ["doc-1"]
+        update_calls = firestore_mocks["update_article_after_processing"].await_args_list
+        assert update_calls[0].args == (
+            "doc-0",
+            {
+                "title_en": SAMPLE_TRIAGE["headline"],
+                "relevance_score": 2,
+                "content_type": "news",
+                "triage_only": True,
+            },
+        )
+        assert summary == {
+            "total": 3,
+            "succeeded": 3,
+            "failed": 0,
+            "processing_errors": 0,
+            "triage_skipped": 2,
+        }
+
+    async def test_triage_all_below_threshold_skips_extraction(
+        self,
+        firestore_mocks: dict[str, AsyncMock],
+        batch_mocks: dict[str, AsyncMock],
+        triage_claude: AsyncMock,
+    ) -> None:
+        """When every article scores below threshold, no batch is ever submitted."""
+        firestore_mocks["get_unprocessed_articles"].return_value = _articles(3)
+        triage_claude.side_effect = self._scores(1, 2, 3)
+
+        summary = await pipeline.run_pipeline()
+
+        batch_mocks["submit_batch"].assert_not_awaited()
+        update_calls = firestore_mocks["update_article_after_processing"].await_args_list
+        assert len(update_calls) == 3
+        assert all(call.args[1]["triage_only"] is True for call in update_calls)
+        assert summary == {
+            "total": 3,
+            "succeeded": 3,
+            "failed": 0,
+            "processing_errors": 0,
+            "triage_skipped": 3,
+        }
+
+    async def test_triage_all_above_threshold_batches_everything(
+        self,
+        firestore_mocks: dict[str, AsyncMock],
+        batch_mocks: dict[str, AsyncMock],
+        triage_claude: AsyncMock,
+    ) -> None:
+        """When every article passes triage, all reach the batch with no triage writes."""
+        firestore_mocks["get_unprocessed_articles"].return_value = _articles(2)
+        triage_claude.side_effect = self._scores(8, 9)
+        batch_mocks["get_batch_results"].return_value = _all_valid_results(2)
+
+        summary = await pipeline.run_pipeline()
+
+        submit_call = batch_mocks["submit_batch"].await_args
+        assert submit_call is not None
+        assert [request["custom_id"] for request in submit_call.args[0]] == ["doc-0", "doc-1"]
+        update_calls = firestore_mocks["update_article_after_processing"].await_args_list
+        assert all("triage_only" not in call.args[1] for call in update_calls)
+        assert summary["triage_skipped"] == 0
+
+    async def test_triage_score_at_threshold_passes(
+        self,
+        firestore_mocks: dict[str, AsyncMock],
+        batch_mocks: dict[str, AsyncMock],
+        triage_claude: AsyncMock,
+    ) -> None:
+        """A score exactly at RELEVANCE_THRESHOLD proceeds to full extraction."""
+        firestore_mocks["get_unprocessed_articles"].return_value = _articles(1)
+        triage_claude.side_effect = self._scores(settings.RELEVANCE_THRESHOLD)
+        batch_mocks["get_batch_results"].return_value = _all_valid_results(1)
+
+        summary = await pipeline.run_pipeline()
+
+        submit_call = batch_mocks["submit_batch"].await_args
+        assert submit_call is not None
+        assert [request["custom_id"] for request in submit_call.args[0]] == ["doc-0"]
+        assert summary["triage_skipped"] == 0
+
+    async def test_triage_api_failure_fails_open(
+        self,
+        firestore_mocks: dict[str, AsyncMock],
+        batch_mocks: dict[str, AsyncMock],
+        triage_claude: AsyncMock,
+    ) -> None:
+        """A Haiku failure (call_claude None) sends every article to extraction."""
+        firestore_mocks["get_unprocessed_articles"].return_value = _articles(2)
+        triage_claude.return_value = None
+        triage_claude.side_effect = None
+        batch_mocks["get_batch_results"].return_value = _all_valid_results(2)
+
+        summary = await pipeline.run_pipeline()
+
+        submit_call = batch_mocks["submit_batch"].await_args
+        assert submit_call is not None
+        assert [request["custom_id"] for request in submit_call.args[0]] == ["doc-0", "doc-1"]
+        assert summary["triage_skipped"] == 0
+
+    async def test_triage_malformed_response_fails_open(
+        self,
+        firestore_mocks: dict[str, AsyncMock],
+        batch_mocks: dict[str, AsyncMock],
+        triage_claude: AsyncMock,
+    ) -> None:
+        """A malformed triage response sends the article to extraction, no triage write."""
+        firestore_mocks["get_unprocessed_articles"].return_value = _articles(1)
+        triage_claude.return_value = "not json at all"
+        batch_mocks["get_batch_results"].return_value = _all_valid_results(1)
+
+        summary = await pipeline.run_pipeline()
+
+        submit_call = batch_mocks["submit_batch"].await_args
+        assert submit_call is not None
+        assert [request["custom_id"] for request in submit_call.args[0]] == ["doc-0"]
+        update_calls = firestore_mocks["update_article_after_processing"].await_args_list
+        assert all("triage_only" not in call.args[1] for call in update_calls)
+        assert summary["triage_skipped"] == 0
+
+    async def test_triage_logs_summary(
+        self,
+        firestore_mocks: dict[str, AsyncMock],
+        batch_mocks: dict[str, AsyncMock],
+        triage_claude: AsyncMock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Triage ends with a summary log of total, passed, and skipped counts."""
+        firestore_mocks["get_unprocessed_articles"].return_value = _articles(3)
+        triage_claude.side_effect = self._scores(2, 8, 3)
+        batch_mocks["get_batch_results"].return_value = {"doc-1": json.dumps(SAMPLE_EXTRACTION)}
+
+        with caplog.at_level("INFO"):
+            await pipeline.run_pipeline()
+
+        assert "Triage: 3 articles, 1 passed threshold, 2 skipped" in caplog.text
