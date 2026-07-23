@@ -34,10 +34,7 @@ from db.firestore import (
     save_article,
     save_health_metrics,
 )
-feat/brand-aliases
 from processing.dedup import DEDUP_WINDOW_HOURS, deduplicate_articles, mark_duplicates
-from processing.dedup import deduplicate_articles, mark_duplicates
-main
 from processing.entities import BrandResolver, load_aliases, promote_entities_from_article
 from processing.novelty import score_article_batch, score_signal_batch
 from processing.pipeline import run_pipeline
