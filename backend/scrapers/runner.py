@@ -8,7 +8,9 @@ pipeline afterwards. A failure in one source never stops the run.
 
 The opt-in Phase 2 intelligence flow (``run_phase2_after`` /
 ``--phase2``) then runs entity promotion, cross-source deduplication,
-signal detection, and novelty scoring over recently processed articles.
+signal detection, and novelty scoring over articles that have been
+extracted but not yet run through Phase 2 (``phase2Processed`` unset),
+capped per run and marked ``phase2Processed`` once the run succeeds.
 
 Cron usage: ``cd /path/to/backend && python -m scrapers.runner``
 Phase 2 opt-in: ``python -m scrapers.runner --phase2``
@@ -24,13 +26,15 @@ from typing import Any
 from config.settings import MAX_ARTICLES_PER_SOURCE
 from db.firestore import (
     article_exists,
+    get_phase2_unprocessed_articles,
     get_recent_processed_articles,
     get_recent_signals,
     keys_to_camel,
+    mark_article_phase2_processed,
     save_article,
     save_health_metrics,
 )
-from processing.dedup import deduplicate_articles, mark_duplicates
+from processing.dedup import DEDUP_WINDOW_HOURS, deduplicate_articles, mark_duplicates
 from processing.entities import BrandResolver, load_aliases, promote_entities_from_article
 from processing.novelty import score_article_batch, score_signal_batch
 from processing.pipeline import run_pipeline
@@ -61,10 +65,13 @@ SCRAPER_CLASSES: list[type[SourceScraper]] = [
     XiaoHongShuScraper,
 ]
 
-# Phase 2 operates on articles processed within this window: wide enough to
-# cover articles from the previous run whose Phase 2 pass failed, without
-# re-chewing the whole recent corpus every 6-hour cron cycle.
-PHASE2_LOOKBACK_HOURS = 24
+# Phase 2 operates only on articles the LLM pipeline has extracted
+# (``processed == true``) but never run through Phase 2 (``phase2Processed``
+# unset — see ``get_phase2_unprocessed_articles``). Each run's batch is capped
+# so a backlog cannot spike Sonnet cost; the newest unprocessed articles win
+# (the query returns them scrapeDate-descending) and the rest wait for the
+# next cron cycle.
+PHASE2_MAX_ARTICLES = 100
 
 # Signals saved within this window count as "newly generated" for novelty
 # scoring; detect_signals_from_articles persists signals without returning
@@ -198,24 +205,57 @@ async def _phase2_promote_entities(articles: list[dict[str, Any]]) -> dict[str, 
     return totals
 
 
-async def _phase2_dedup(articles: list[dict[str, Any]]) -> dict[str, Any]:
-    """Find cross-source duplicate groups and persist the dedup fields.
+async def _phase2_dedup_corpus(exclude_ids: set[str]) -> list[dict[str, Any]]:
+    """Fetch recent processed articles as cross-source dedup candidates.
 
-    Articles newly marked duplicate also get ``isDuplicate=True`` set on
-    the in-memory dicts, so the signal detection step sees this run's
-    dedup results without re-fetching from Firestore.
+    Cross-source duplicates can arrive in a later run than their canonical
+    (a second source publishes the same story hours later), so dedup must
+    compare the new batch against already-processed articles, not just
+    against itself. Reads the same ``DEDUP_WINDOW_HOURS`` window dedup
+    scores within, bridges the snake_case db reads to the camelCase doc
+    shape, and drops any candidate already present in the new batch.
+    """
+    fetched = await get_recent_processed_articles(hours=DEDUP_WINDOW_HOURS)
+    corpus = [keys_to_camel(article) for article in fetched]
+    return [article for article in corpus if str(article.get("id")) not in exclude_ids]
+
+
+def _group_touches_batch(group: dict[str, Any], batch_ids: set[str]) -> bool:
+    """True if a dedup group's canonical or any duplicate is in the new batch.
+
+    Groups made up entirely of already-processed corpus articles were
+    persisted in a prior run; only groups involving a new-batch article are
+    (re-)written this run, so Phase 2 marks only the new batch.
+    """
+    members = {str(group["canonical_id"]), *(str(dup_id) for dup_id in group["duplicate_ids"])}
+    return not members.isdisjoint(batch_ids)
+
+
+async def _phase2_dedup(articles: list[dict[str, Any]]) -> dict[str, Any]:
+    """Find cross-source duplicate groups for the new batch and persist them.
+
+    Runs dedup over the union of the new batch and a recent comparison
+    corpus (so duplicates spanning cron runs are caught), but only persists
+    and in-memory-flags groups that involve a new-batch article — corpus-only
+    groups were already handled in a prior run. Articles newly marked
+    duplicate also get ``isDuplicate=True`` set on the in-memory dicts, so
+    the signal detection step sees this run's dedup results without
+    re-fetching from Firestore.
 
     dict[str, Any]: mixes int counts from analysis and persistence.
     """
-    result = await deduplicate_articles(articles)
-    updated = await mark_duplicates(result["groups"])
-    duplicate_ids = {str(dup_id) for group in result["groups"] for dup_id in group["duplicate_ids"]}
+    batch_ids = {str(article.get("id")) for article in articles}
+    corpus = await _phase2_dedup_corpus(batch_ids)
+    result = await deduplicate_articles(articles + corpus)
+    groups = [group for group in result["groups"] if _group_touches_batch(group, batch_ids)]
+    updated = await mark_duplicates(groups)
+    duplicate_ids = {str(dup_id) for group in groups for dup_id in group["duplicate_ids"]}
     for article in articles:
         if str(article.get("id")) in duplicate_ids:
             article["isDuplicate"] = True
     return {
-        "duplicate_groups_found": result["duplicate_groups_found"],
-        "articles_marked_duplicate": result["articles_marked_duplicate"],
+        "duplicate_groups_found": len(groups),
+        "articles_marked_duplicate": sum(len(group["duplicate_ids"]) for group in groups),
         "documents_updated": updated,
     }
 
@@ -251,15 +291,41 @@ async def _phase2_score_novelty(articles: list[dict[str, Any]]) -> dict[str, Any
     return {"articles_scored": len(article_scores), "signals_scored": len(signal_scores)}
 
 
-async def run_phase2_processing(lookback_hours: int = PHASE2_LOOKBACK_HOURS) -> dict[str, Any]:
-    """Run the Phase 2 intelligence pipeline over recently processed articles.
+async def _phase2_mark_processed(articles: list[dict[str, Any]]) -> int:
+    """Mark each batch article ``phase2Processed`` after a fully successful run.
 
-    Flow: entity promotion -> deduplication -> signal detection -> novelty
-    scoring. Articles come back snake_case from the db layer and are
+    Called only when every Phase 2 step completed without a top-level
+    failure, so a partially processed batch is never flagged and is retried
+    on the next run. A single write failure is logged and skipped — the rest
+    of the batch is still marked. Returns the count of articles marked.
+    """
+    marked = 0
+    for article in articles:
+        article_id = article.get("id")
+        if not article_id:
+            continue
+        try:
+            await mark_article_phase2_processed(str(article_id))
+        except Exception:  # a marking failure must not crash the run
+            logger.exception(f"failed to mark phase2Processed article_id={article_id}")
+            continue
+        marked += 1
+    return marked
+
+
+async def run_phase2_processing() -> dict[str, Any]:
+    """Run the Phase 2 intelligence pipeline over not-yet-processed articles.
+
+    Fetches articles the LLM pipeline has extracted but Phase 2 has not seen
+    (``phase2Processed`` unset), newest first, capped at ``PHASE2_MAX_ARTICLES``
+    per run. Flow: entity promotion -> deduplication -> signal detection ->
+    novelty scoring. Articles come back snake_case from the db layer and are
     bridged to camelCase once up front — the Phase 2 modules read the
     Firestore doc shape (``id`` passes through unchanged). Each step is
     independently guarded: a failing step is logged, recorded under
-    ``errors``, and never blocks the steps after it.
+    ``errors``, and never blocks the steps after it. Only when every step
+    succeeds are the batch's articles marked ``phase2Processed`` so they are
+    excluded next run; any step failure leaves the whole batch to be retried.
 
     dict[str, Any]: the summary mixes counts and per-step result dicts
     (None for steps that failed or never ran).
@@ -270,17 +336,25 @@ async def run_phase2_processing(lookback_hours: int = PHASE2_LOOKBACK_HOURS) -> 
         "dedup": None,
         "signals": None,
         "novelty": None,
+        "marked_processed": 0,
         "errors": [],
     }
     try:
-        fetched = await get_recent_processed_articles(hours=lookback_hours)
+        fetched = await get_phase2_unprocessed_articles()
     except Exception:
-        logger.exception("phase 2 aborted: failed to fetch recently processed articles")
+        logger.exception("phase 2 aborted: failed to fetch unprocessed articles")
         summary["errors"].append("fetch_articles")
         return summary
+
+    total = len(fetched)
+    if total > PHASE2_MAX_ARTICLES:
+        logger.warning(
+            f"Phase 2: capping at {PHASE2_MAX_ARTICLES} articles, {total} unprocessed remaining"
+        )
+        fetched = fetched[:PHASE2_MAX_ARTICLES]  # query is scrapeDate-descending: newest kept
     articles = [keys_to_camel(article) for article in fetched]
     summary["articles_fetched"] = len(articles)
-    logger.info(f"phase 2 starting: {len(articles)} articles from last {lookback_hours}h")
+    logger.info(f"phase 2 starting: {len(articles)} of {total} unprocessed articles")
 
     steps: list[tuple[str, Callable[[list[dict[str, Any]]], Awaitable[dict[str, Any]]]]] = [
         ("entity_promotion", _phase2_promote_entities),
@@ -297,6 +371,14 @@ async def run_phase2_processing(lookback_hours: int = PHASE2_LOOKBACK_HOURS) -> 
             summary["errors"].append(step_name)
             continue
         logger.info(f"phase 2 step complete: {step_name} result={summary[step_name]}")
+
+    if summary["errors"]:
+        logger.warning(
+            f"phase 2 had step failures {summary['errors']}; "
+            f"leaving {len(articles)} articles unmarked for retry"
+        )
+    else:
+        summary["marked_processed"] = await _phase2_mark_processed(articles)
     return summary
 
 

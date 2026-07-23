@@ -282,6 +282,57 @@ class TestGetRecentProcessedArticles:
         assert await firestore.get_recent_processed_articles() == []
 
 
+class TestGetPhase2UnprocessedArticles:
+    """get_phase2_unprocessed_articles is the Phase 2 work queue."""
+
+    async def test_get_phase2_unprocessed_articles_filters_and_orders(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """Filters processed==true, excludes phase2Processed==true, newest first."""
+        query = _make_query(
+            [
+                _make_snapshot("doc-1", {"sourceName": "gasgoo"}),  # no phase2Processed field
+                _make_snapshot("doc-2", {"sourceName": "cnevpost", "phase2Processed": False}),
+                _make_snapshot("doc-3", {"sourceName": "autohome", "phase2Processed": True}),
+            ]
+        )
+        collection_ref.where.return_value = query
+
+        articles = await firestore.get_phase2_unprocessed_articles()
+
+        mock_db.collection.assert_called_once_with("articles")
+        field_filter = collection_ref.where.call_args.kwargs["filter"]
+        assert field_filter.field_path == "processed"
+        assert field_filter.op_string == "=="
+        assert field_filter.value is True
+        query.order_by.assert_called_once_with("scrapeDate", direction="DESCENDING")
+        # doc-3 (phase2Processed==true) is skipped; the field-absent and
+        # field-false docs both survive, in query order.
+        assert [article["id"] for article in articles] == ["doc-1", "doc-2"]
+        assert articles[0] == {"id": "doc-1", "source_name": "gasgoo"}
+
+    async def test_get_phase2_unprocessed_articles_empty(
+        self, mock_db: MagicMock, collection_ref: MagicMock
+    ) -> None:
+        """An empty query result returns an empty list."""
+        collection_ref.where.return_value = _make_query([])
+
+        assert await firestore.get_phase2_unprocessed_articles() == []
+
+
+class TestMarkArticlePhase2Processed:
+    """mark_article_phase2_processed flags an article after Phase 2."""
+
+    async def test_mark_article_phase2_processed_sets_flag(
+        self, mock_db: MagicMock, collection_ref: MagicMock, doc_ref: MagicMock
+    ) -> None:
+        """A single camelCase phase2Processed=True update lands on the doc."""
+        await firestore.mark_article_phase2_processed(DOC_ID)
+
+        collection_ref.document.assert_called_once_with(DOC_ID)
+        doc_ref.update.assert_awaited_once_with({"phase2Processed": True})
+
+
 class TestUpdateArticleDedupFields:
     """update_article_dedup_fields writes ADR 004 dedup fields."""
 
