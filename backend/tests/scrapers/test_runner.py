@@ -10,12 +10,14 @@ hand-offs — not the underlying module behavior.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from config.settings import MAX_ARTICLES_PER_SOURCE
+from processing.dedup import DEDUP_WINDOW_HOURS
 from scrapers import runner
 from scrapers.sources._36kr import ThirtySixKrScraper
 from scrapers.sources.autohome import AutohomeScraper
@@ -178,12 +180,16 @@ def phase2_mocks(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
     runner behavior under test, not an external call.
     """
     mocks = {
-        "get_recent_processed_articles": AsyncMock(
+        "get_phase2_unprocessed_articles": AsyncMock(
             return_value=[dict(article) for article in RECENT_ARTICLES_SNAKE]
         ),
+        # Dedup comparison corpus; empty by default so the union equals the
+        # new batch and dedup behaves exactly as within-batch.
+        "get_recent_processed_articles": AsyncMock(return_value=[]),
         "promote_entities_from_article": AsyncMock(return_value=dict(PROMOTE_COUNTS)),
         "deduplicate_articles": AsyncMock(return_value=DEDUP_RESULT),
         "mark_duplicates": AsyncMock(return_value=2),
+        "mark_article_phase2_processed": AsyncMock(),
         "detect_signals_from_articles": AsyncMock(return_value=dict(SIGNALS_SUMMARY)),
         "score_article_batch": AsyncMock(
             return_value=[{"article_id": "art-1", "novelty_score": 0.8}]
@@ -479,9 +485,7 @@ class TestRunPhase2Processing:
         """All four steps execute and report into the summary."""
         summary = await runner.run_phase2_processing()
 
-        phase2_mocks["get_recent_processed_articles"].assert_awaited_once_with(
-            hours=runner.PHASE2_LOOKBACK_HOURS
-        )
+        phase2_mocks["get_phase2_unprocessed_articles"].assert_awaited_once_with()
         assert summary["articles_fetched"] == 2
         assert summary["errors"] == []
         assert summary["entity_promotion"] is not None
@@ -578,7 +582,7 @@ class TestRunPhase2Processing:
         self, phase2_mocks: dict[str, AsyncMock]
     ) -> None:
         """A failed article fetch returns an empty summary without running steps."""
-        phase2_mocks["get_recent_processed_articles"].side_effect = RuntimeError("db down")
+        phase2_mocks["get_phase2_unprocessed_articles"].side_effect = RuntimeError("db down")
 
         summary = await runner.run_phase2_processing()
 
@@ -588,3 +592,81 @@ class TestRunPhase2Processing:
         phase2_mocks["deduplicate_articles"].assert_not_awaited()
         phase2_mocks["detect_signals_from_articles"].assert_not_awaited()
         phase2_mocks["score_article_batch"].assert_not_awaited()
+        phase2_mocks["mark_article_phase2_processed"].assert_not_awaited()
+
+    async def test_run_phase2_processing_marks_processed_on_success(
+        self, phase2_mocks: dict[str, AsyncMock]
+    ) -> None:
+        """Every batch article is marked phase2Processed when all steps succeed."""
+        summary = await runner.run_phase2_processing()
+
+        assert phase2_mocks["mark_article_phase2_processed"].await_count == 2
+        marked = {
+            call.args[0] for call in phase2_mocks["mark_article_phase2_processed"].await_args_list
+        }
+        assert marked == {"art-1", "art-2"}
+        assert summary["marked_processed"] == 2
+
+    async def test_run_phase2_processing_does_not_mark_on_step_failure(
+        self, phase2_mocks: dict[str, AsyncMock]
+    ) -> None:
+        """A failed step leaves the whole batch unmarked so it retries next run."""
+        phase2_mocks["deduplicate_articles"].side_effect = RuntimeError("firestore exploded")
+
+        summary = await runner.run_phase2_processing()
+
+        assert summary["errors"] == ["dedup"]
+        phase2_mocks["mark_article_phase2_processed"].assert_not_awaited()
+        assert summary["marked_processed"] == 0
+
+    async def test_run_phase2_processing_caps_at_max(
+        self, phase2_mocks: dict[str, AsyncMock], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """More than the cap keeps only the newest PHASE2_MAX_ARTICLES (query order)."""
+        overflow = runner.PHASE2_MAX_ARTICLES + 1
+        # Query returns scrapeDate-descending, so index 0 is newest and the
+        # last id is the oldest that must be dropped.
+        phase2_mocks["get_phase2_unprocessed_articles"].return_value = [
+            {"id": f"art-{i}", "brands_mentioned": ["BYD"]} for i in range(overflow)
+        ]
+
+        with caplog.at_level(logging.WARNING, logger="scrapers.runner"):
+            summary = await runner.run_phase2_processing()
+
+        assert summary["articles_fetched"] == runner.PHASE2_MAX_ARTICLES
+        assert phase2_mocks["promote_entities_from_article"].await_count == (
+            runner.PHASE2_MAX_ARTICLES
+        )
+        promoted_ids = [
+            call.args[0]["id"]
+            for call in phase2_mocks["promote_entities_from_article"].await_args_list
+        ]
+        assert f"art-{overflow - 1}" not in promoted_ids  # oldest dropped
+        assert phase2_mocks["mark_article_phase2_processed"].await_count == (
+            runner.PHASE2_MAX_ARTICLES
+        )
+        assert (
+            f"Phase 2: capping at {runner.PHASE2_MAX_ARTICLES} articles, "
+            f"{overflow} unprocessed remaining"
+        ) in caplog.text
+
+    async def test_run_phase2_processing_dedup_reads_corpus(
+        self, phase2_mocks: dict[str, AsyncMock]
+    ) -> None:
+        """Dedup compares the new batch against a recent corpus, minus batch dupes."""
+        # Corpus repeats one batch id (art-1) and adds one older article.
+        phase2_mocks["get_recent_processed_articles"].return_value = [
+            {"id": "art-1", "source_name": "gasgoo"},
+            {"id": "art-old", "source_name": "36kr"},
+        ]
+
+        await runner.run_phase2_processing()
+
+        phase2_mocks["get_recent_processed_articles"].assert_awaited_once_with(
+            hours=DEDUP_WINDOW_HOURS
+        )
+        call = phase2_mocks["deduplicate_articles"].await_args
+        assert call is not None
+        (deduped,) = call.args
+        # Union = new batch + corpus, with the corpus copy of art-1 dropped.
+        assert [article["id"] for article in deduped] == ["art-1", "art-2", "art-old"]

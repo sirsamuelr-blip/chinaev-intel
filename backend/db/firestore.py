@@ -217,6 +217,55 @@ async def get_recent_processed_articles(hours: int = 72) -> list[dict[str, Any]]
     return articles
 
 
+async def get_phase2_unprocessed_articles() -> list[dict[str, Any]]:
+    """Return processed articles that have not been through Phase 2 yet.
+
+    Newest scrape first. Each dict has snake_case keys plus an ``id`` key
+    holding the document ID. This is the Phase 2 pipeline's work queue: an
+    article qualifies once the LLM pipeline has set ``processed == True`` but
+    the Phase 2 pass has not yet set ``phase2Processed``.
+
+    The ``phase2Processed`` exclusion is applied in Python rather than as a
+    Firestore ``!=`` filter: a ``!=`` query drops documents where the field
+    is absent, but freshly extracted articles have no ``phase2Processed``
+    field at all and are exactly the ones we want. A missing or falsey flag
+    both count as not-yet-processed. This mirrors ``get_recent_processed_articles``
+    (same ``processed == true`` + ``scrapeDate`` index, no extra composite).
+    """
+    query = (
+        get_db()
+        .collection(ARTICLES_COLLECTION)
+        .where(filter=FieldFilter("processed", "==", True))
+        .order_by("scrapeDate", direction="DESCENDING")
+    )
+    snapshots = await query.get()
+    articles: list[dict[str, Any]] = []
+    for snapshot in snapshots:
+        article = _keys_to_snake(snapshot.to_dict() or {})
+        if article.get("phase2_processed") is True:
+            continue
+        article["id"] = snapshot.id
+        articles.append(article)
+    return articles
+
+
+async def mark_article_phase2_processed(article_id: str) -> None:
+    """Set ``phase2Processed = True`` on an article after a successful Phase 2 pass.
+
+    Called by the runner only once every Phase 2 step has completed for the
+    run, so the article is excluded from ``get_phase2_unprocessed_articles``
+    on the next cron cycle. A failed run leaves the flag unset and the
+    article is retried.
+    """
+    await (
+        get_db()
+        .collection(ARTICLES_COLLECTION)
+        .document(article_id)
+        .update({"phase2Processed": True})
+    )
+    logger.info(f"marked phase2Processed doc_id={article_id}")
+
+
 async def update_article_dedup_fields(
     article_id: str,
     is_duplicate: bool,

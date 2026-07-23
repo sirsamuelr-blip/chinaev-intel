@@ -81,6 +81,7 @@ Composite indexes: `brandId + category`, `category + firstSeenDate`, `brandId + 
 | relevanceScore | number | 1-10, 10 = directly about software/AI/UX features |
 | processed | boolean | True after LLM extraction is complete |
 | processingError | string | Error message if LLM extraction failed. Null on success. |
+| phase2Processed | boolean | True after the Phase 2 intelligence pass (entity promotion, dedup, signals, novelty) completes. Absent until then; the Phase 2 queue is `processed == true` AND `phase2Processed` unset/false. |
 | brandsMentioned | array\<string\> | Brand names found in the article |
 | vehiclesMentioned | array\<string\> | Specific model names found |
 | featuresExtracted | array\<map\> | Embedded array of extracted feature objects (see llm-pipeline.md for shape) |
